@@ -18,7 +18,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import (
     DATA_DIR, PROSPECTS_CSV, QUALIFICADOS_CSV, QUALIFICADO_FIELDS,
-    env, is_blocked_brand, load_env, log, read_csv, write_csv,
+    definir_servico_recomendado, env, is_blocked_brand,
+    load_env, log, read_csv, write_csv,
 )
 
 APRENDIZADOS_PATH = DATA_DIR / "aprendizados.json"
@@ -274,6 +275,9 @@ def main():
         p_q.setdefault("tem_email", "")
         p_q.setdefault("email_fonte", "")
         p_q.setdefault("prioridade", "")
+        # Recalcula servico_recomendado defensivamente (CSVs antigos não têm a coluna)
+        if not p_q.get("servico_recomendado"):
+            p_q["servico_recomendado"] = definir_servico_recomendado(p_q)
         distribuicao[score] = distribuicao.get(score, 0) + 1
         if score >= score_min:
             qualificados.append(p_q)

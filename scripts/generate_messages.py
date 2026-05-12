@@ -14,19 +14,55 @@ from _common import (
 )
 
 
-SISTEMA_PROMPT = """Você é Augusto Barbosa, profissional brasileiro que vende sites profissionais e sistemas digitais para pequenos negócios.
+SISTEMA_PROMPT = """Você é o assistente comercial da Scout Company, que vende 3 serviços:
+  1. SITES profissionais (entrega 7 dias) — pra negócio aparecer no Google
+  2. SISTEMAS de gestão sob medida — pra operação parar de usar papel/planilha
+  3. AUTOMAÇÃO COM IA (prospecção/atendimento/conteúdo) — pra empresa crescer sem contratar
+
+Você está escrevendo mensagem fria via WhatsApp e e-mail. Vai te ser dado o SERVIÇO certo
+pra esse prospect — escreva focado SÓ nesse serviço, sem misturar os outros.
 
 Sua escrita:
-- Tom: humano, direto, gentil. NÃO comercial. Soa como mensagem de pessoa real, não bot.
+- Tom: humano, direto, consultivo. NÃO comercial-batido. Voz da Scout (empresa).
 - Português brasileiro, casual mas profissional. Sem clichês ("estamos no mercado há X anos").
 - Nunca prometa o que não foi pedido. Nunca invente dados.
-- Sem CTA pesado. CTA é convite, não pressão.
-- Não cite benefícios genéricos ("aumentar vendas", "alcançar mais clientes"). Aborde o problema ESPECÍFICO daquele negócio.
+- Não cite benefícios genéricos ("aumentar vendas"). Aborde o problema ESPECÍFICO do negócio.
+- Use SOMENTE os dados fornecidos."""
 
-Você está enviando mensagem fria via WhatsApp e e-mail para um possível cliente.
-Use SOMENTE os dados fornecidos do negócio."""
+# Bandeiras-base (referência de estilo/conteúdo) — Claude personaliza a partir delas
+BANDEIRA_SITE = """Oi! Vi que [NOME] tem [X] avaliações no Google — resultado de quem faz um trabalho sério.
+Só que quem busca [SEGMENTO] online em [CIDADE] e não encontra um site acaba indo pro concorrente.
+A Scout cria sites profissionais pra [SEGMENTO] — simples, bonitos e fáceis de encontrar.
+Dá uma olhada: scoutcompany.com.br — se fizer sentido, me fala por aqui."""
+
+BANDEIRA_SISTEMA = """Oi! Vi que [NOME] tem uma operação consolidada em [CIDADE] — as avaliações mostram isso.
+Muitas empresas do seu segmento ainda gerenciam tudo no papel ou em planilhas, perdendo tempo e dinheiro.
+A Scout desenvolve sistemas sob medida pra [SEGMENTO] — controle de clientes, agendamentos, financeiro, tudo num lugar só.
+Dá uma olhada: scoutcompany.com.br — se fizer sentido, me conta mais sobre sua operação."""
+
+BANDEIRA_AUTOMACAO = """Oi! Vi que [NOME] atua em [SEGMENTO] — mercado onde quem aparece mais, vende mais.
+A Scout implementa automação com IA pra empresas como a sua: prospecção automática, atendimento 24h e geração de conteúdo no piloto automático.
+Dá uma olhada: scoutcompany.com.br — se fizer sentido, me conta mais sobre sua operação."""
+
+BANDEIRAS = {
+    "site": BANDEIRA_SITE,
+    "sistema": BANDEIRA_SISTEMA,
+    "automacao": BANDEIRA_AUTOMACAO,
+}
+
+SERVICO_DESCRICAO = {
+    "site": "site profissional (entrega 7 dias, otimizado pra Google, responsivo)",
+    "sistema": "sistema de gestão sob medida (clientes/agendamentos/financeiro num só lugar)",
+    "automacao": "automação com IA (prospecção, atendimento 24h via WhatsApp, geração de conteúdo)",
+}
 
 USER_PROMPT_TEMPLATE = """Gere a mensagem de WhatsApp e o email para este prospect. UMA versão polida de cada — não duas, não alternativas.
+
+SERVIÇO QUE A SCOUT VAI OFERECER (foco ÚNICO da mensagem):
+{servico_descricao}
+
+REFERÊNCIA DE TOM/ESTRUTURA (não copie literal, use como base de inspiração):
+{bandeira}
 
 DADOS DO NEGÓCIO:
 - Nome: {nome}
@@ -43,6 +79,10 @@ REFERÊNCIA GEOGRÁFICA (OBRIGATÓRIA):
 - Mencione naturalmente a cidade ({cidade}) na mensagem — uma vez no WhatsApp, uma vez no email.
 - Exemplos naturais: "aqui em {cidade}", "no mercado de {cidade}", "quem busca [segmento] em {cidade}".
 - NÃO escreva "na sua região" ou "aqui na região" — use o nome da cidade.
+
+FOCO DO SERVIÇO (CRÍTICO):
+- Fale APENAS do serviço acima ({servico_label}). NÃO misture os outros 2 serviços nessa mensagem.
+- Aborde o problema concreto que esse serviço resolve pra esse tipo de negócio.
 
 ASSINATURA (use no email, NÃO no WhatsApp):
 {assinatura_nome} | {assinatura_telefone}
@@ -105,7 +145,14 @@ def gerar_via_claude(prospect, assinatura_nome, assinatura_telefone):
     if not cidade or len(cidade) <= 2:  # "SP" sem cidade real → fallback gentil
         cidade = "sua cidade"
 
+    servico = (prospect.get("servico_recomendado") or "site").strip().lower()
+    if servico not in BANDEIRAS:
+        servico = "site"
+
     user_prompt = USER_PROMPT_TEMPLATE.format(
+        servico_label=servico.upper(),
+        servico_descricao=SERVICO_DESCRICAO[servico],
+        bandeira=BANDEIRAS[servico],
         nome=prospect.get("nome", ""),
         segmento=prospect.get("segmento", ""),
         cidade=cidade,
@@ -199,6 +246,7 @@ def gerar_via_template(prospect, assinatura_nome, assinatura_telefone):
     situacao = (prospect.get("situacao") or "").lower()
     cidade = (prospect.get("cidade") or "").strip()
     referencia_local = f"em {cidade}" if cidade and len(cidade) > 2 else "na sua região"
+    servico = (prospect.get("servico_recomendado") or "site").strip().lower()
 
     # Elogio baseado em rating + reviews
     try:
@@ -222,37 +270,57 @@ def gerar_via_template(prospect, assinatura_nome, assinatura_telefone):
         elogio = (f"Estava mapeando negócios de {segmento.lower()} {referencia_local} "
                   f"e {artigo} {nome} apareceu nas referências.")
 
-    # Diagnóstico do problema digital
-    if "sem site" in situacao or (not site and not insta):
-        diagnostico = ("Reparei que vocês não têm site. Hoje, quando alguém busca "
-                       f"no Google por {segmento.lower()} {referencia_local}, quem aparece é a "
-                       "concorrência — mesmo quando o serviço de vocês é melhor. "
-                       "Sem uma página onde o cliente novo encontre informação "
-                       "rápida e um caminho pro contato, ele vai pro próximo "
-                       "resultado.")
-        cta = ("Tenho um exemplo de site pronto que dá pra adaptar pra vocês "
-               "em 1-2 dias. Posso te mandar o preview agora, sem compromisso?")
-    elif "só instagram" in situacao or (not site and insta):
-        diagnostico = ("Vi que a presença digital de vocês está concentrada no "
-                       f"Instagram ({insta}). É um bom canal, mas Instagram não "
-                       "aparece no Google quando alguém pesquisa pelo serviço — "
-                       "e cliente novo pesquisa antes de comprar. Sem site, vocês "
-                       "estão deixando de ser encontrados.")
-        cta = ("Posso te mostrar em 5 minutos como ficaria um site simples "
-               f"pra {segmento.lower()}, com WhatsApp integrado e link direto pro Insta?")
-    elif "site desatualizado" in situacao or "site antigo" in situacao:
-        diagnostico = ("Dei uma olhada no site de vocês e ele tem alguns pontos "
-                       "que dão pra modernizar — principalmente como aparece no "
-                       "celular (que é onde 80% dos clientes navegam hoje). "
-                       "Site antigo passa a impressão de negócio antigo, mesmo "
-                       "quando o serviço é de ponta.")
-        cta = ("Tenho um exemplo de redesign que posso adaptar com a identidade "
-               "de vocês. Posso te enviar o preview?")
+    # Diagnóstico + CTA dependem do SERVIÇO recomendado pro prospect
+    if servico == "automacao":
+        diagnostico = (
+            f"Em {segmento.lower()}, quem aparece mais vende mais — e prospectar manualmente "
+            "consome o tempo de quem deveria estar fechando contrato. A Scout implementa "
+            "automação com IA: prospecção contínua, atendimento 24h e geração de conteúdo "
+            "no piloto automático."
+        )
+        cta = ("Dá uma olhada nos nossos projetos: scoutcompany.com.br. "
+               "Se fizer sentido, me conta um pouco da sua operação que monto algo sob medida.")
+    elif servico == "sistema":
+        diagnostico = (
+            f"Muitas empresas de {segmento.lower()} ainda controlam clientes, agendamentos "
+            "e financeiro em planilhas ou no caderno — perdendo tempo e dinheiro quando o "
+            "volume cresce. A Scout desenvolve sistemas sob medida pra esse tipo de operação, "
+            "centralizando tudo num lugar só."
+        )
+        cta = ("Dá uma olhada: scoutcompany.com.br. Se fizer sentido, "
+               "me conta mais sobre como vocês trabalham hoje.")
     else:
-        diagnostico = ("Olhando a presença digital de vocês, identifiquei "
-                       "alguns pontos onde dá pra melhorar a captação de "
-                       "clientes — sem precisar gastar com tráfego pago.")
-        cta = ("Posso te mostrar em 5 minutos o que é possível? Sem compromisso.")
+        # site — variações específicas por situação digital
+        if "sem site" in situacao or (not site and not insta):
+            diagnostico = ("Reparei que vocês não têm site. Hoje, quando alguém busca "
+                           f"no Google por {segmento.lower()} {referencia_local}, quem aparece é a "
+                           "concorrência — mesmo quando o serviço de vocês é melhor. "
+                           "Sem uma página onde o cliente novo encontre informação "
+                           "rápida e um caminho pro contato, ele vai pro próximo "
+                           "resultado.")
+            cta = ("Tenho um exemplo de site pronto que dá pra adaptar pra vocês "
+                   "em 1-2 dias. Posso te mandar o preview agora, sem compromisso?")
+        elif "só instagram" in situacao or (not site and insta):
+            diagnostico = ("Vi que a presença digital de vocês está concentrada no "
+                           f"Instagram ({insta}). É um bom canal, mas Instagram não "
+                           "aparece no Google quando alguém pesquisa pelo serviço — "
+                           "e cliente novo pesquisa antes de comprar. Sem site, vocês "
+                           "estão deixando de ser encontrados.")
+            cta = ("Posso te mostrar em 5 minutos como ficaria um site simples "
+                   f"pra {segmento.lower()}, com WhatsApp integrado e link direto pro Insta?")
+        elif "site desatualizado" in situacao or "site antigo" in situacao or "site fraco" in situacao:
+            diagnostico = ("Dei uma olhada no site de vocês e ele tem alguns pontos "
+                           "que dão pra modernizar — principalmente como aparece no "
+                           "celular (que é onde 80% dos clientes navegam hoje). "
+                           "Site antigo passa a impressão de negócio antigo, mesmo "
+                           "quando o serviço é de ponta.")
+            cta = ("Tenho um exemplo de redesign que posso adaptar com a identidade "
+                   "de vocês. Posso te enviar o preview?")
+        else:
+            diagnostico = ("Olhando a presença digital de vocês, identifiquei "
+                           "alguns pontos onde dá pra melhorar a captação de "
+                           "clientes — sem precisar gastar com tráfego pago.")
+            cta = ("Posso te mostrar em 5 minutos o que é possível? Sem compromisso.")
 
     # WhatsApp version (4 parágrafos curtos, tom de empresa, com link obrigatório)
     whatsapp = f"""Oi! Tudo bem?
@@ -292,6 +360,7 @@ def salvar_mensagem(prospect, whatsapp, email_assunto, email_corpo):
     slug = slugify(prospect.get("nome", "") or prospect.get("id", "sem-nome"))
     path = MENS_DIR / f"{slug}.txt"
     content = f"""# {prospect.get('nome','')} — {prospect.get('segmento','')}
+# Serviço recomendado: {(prospect.get('servico_recomendado') or 'site').upper()}
 # Contato: {prospect.get('telefone','')} | {prospect.get('instagram','')}
 # Endereço: {prospect.get('endereco','')}
 # Score: {prospect.get('score','')}/10 — {prospect.get('situacao','')}

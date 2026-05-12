@@ -25,6 +25,8 @@ PROSPECT_FIELDS = [
     "id", "nome", "segmento", "endereco", "cidade",
     "telefone", "instagram", "site", "rating", "user_ratings_total",
     "place_id", "fonte", "coletado_em",
+    # Serviço Scout que melhor encaixa pra esse prospect
+    "servico_recomendado",   # site | sistema | automacao
 ]
 
 QUALIFICADO_FIELDS = PROSPECT_FIELDS + [
@@ -41,6 +43,8 @@ QUALIFICADO_FIELDS = PROSPECT_FIELDS + [
 PIPELINE_FIELDS = [
     "id", "nome", "segmento", "contato", "data_abordagem",
     "status", "observacao",
+    # Serviço Scout sob o qual o prospect foi abordado
+    "servico",           # site | sistema | automacao
     # Tracking do site scoutcompany.com.br
     "data_envio_site",   # quando o link foi enviado pro prospect (ISO 8601)
     "site_acessado",     # "sim" / "nao" / "" — atualização manual por enquanto
@@ -173,6 +177,102 @@ def is_blocked_brand(nome):
         if _re.search(pat, n):
             return True
     return False
+
+
+# ═══════════════════════════════════════════════════════════
+# ROTEADOR DE SERVIÇO Scout (site / sistema / automacao)
+# ═══════════════════════════════════════════════════════════
+# Cada segmento tem um serviço PRIMÁRIO mais provável.
+# Em seguida `definir_servico_recomendado` aplica overrides por
+# contexto (presença digital, volume de avaliações etc).
+
+# Palavras-chave por serviço (substring lowercase no segmento normalizado)
+SEG_KEYWORDS_SITE = (
+    "restaurante", "pizzaria", "padaria", "hamburger", "hamburgueria",
+    "lanchonete", "doceria", "confeitaria", "buffet",
+    "salao", "salão", "barbearia", "barber", "estetica", "estética",
+    "petshop", "pet shop", "pet ",
+    "loja", "boutique", "otica", "ótica",
+    "farmacia", "farmácia",
+    "academia",  # pequenas academias = site costuma resolver
+)
+SEG_KEYWORDS_SISTEMA = (
+    "veterinaria", "veterinária",
+    "clinica", "clínica", "consultorio", "consultório", "dentista", "odonto",
+    "fisioterapia",
+    "studio pilates", "studio fitness",
+    "escola", "creche", "colegio", "colégio", "curso",
+    "imobiliaria", "imobiliária",
+    "contabilidade", "contador",
+    "transportadora", "logistica", "logística",
+    "cooperativa",
+    "auto mecanica", "oficina",  # operação com OS, peças, agenda
+)
+SEG_KEYWORDS_AUTOMACAO = (
+    "agencia de marketing", "agência de marketing", "marketing digital",
+    "consultoria",
+    "advocacia", "advogado", "escritório de advocacia", "escritorio de advocacia",
+    "corretora", "corretor de imoveis", "corretor de imóveis", "corretor de seguros",
+    "distribuidora", "atacado", "atacadista",
+    "b2b",
+)
+
+
+def _seg_match(seg_norm, keywords):
+    return any(k in seg_norm for k in keywords)
+
+
+def definir_servico_recomendado(prospect):
+    """Define qual dos 3 serviços Scout encaixa melhor pra esse prospect.
+
+    Ordem de decisão:
+      1. Sem site OU site fraco/rede social   →  SITE   (independente do segmento)
+      2. Segmento bate AUTOMACAO              →  AUTOMACAO
+      3. Segmento bate SISTEMA + alta atividade (50+ avaliações) → SISTEMA
+      4. Segmento bate SISTEMA com baixa atividade  →  SITE  (ainda precisa visibilidade)
+      5. Segmento bate SITE                   →  SITE
+      6. Default                              →  SITE
+
+    Retorna string lowercase: "site" | "sistema" | "automacao"
+    """
+    site = (prospect.get("site") or "").strip().lower()
+    insta = (prospect.get("instagram") or "").strip().lower()
+    seg = (prospect.get("segmento") or "").lower()
+    try:
+        n_reviews = int(float(prospect.get("user_ratings_total") or 0))
+    except (TypeError, ValueError):
+        n_reviews = 0
+
+    # Detecção de "site fraco" simples (URL) — duplica heurística mínima do qualify
+    fraco_hints = (
+        "wixsite.com", "wix.com", "canva.site", "linktr.ee", "linktree",
+        "linkin.bio", "beacons.ai", "facebook.com", "instagram.com",
+        "google.com/maps", "g.page", "lojaintegrada.com.br",
+        "godaddysites.com", "negocio.site", "site.google.com",
+    )
+    site_fraco = bool(site) and any(h in site for h in fraco_hints)
+
+    # AUTOMACAO tem precedência forte: B2B/agências geralmente já têm site
+    if _seg_match(seg, SEG_KEYWORDS_AUTOMACAO):
+        return "automacao"
+
+    # Sem site OU só Instagram OU site fraco → SITE quase sempre
+    if not site or site_fraco or (insta and not site):
+        # Exceção: SISTEMA-fit com muito volume continua sistema mesmo sem site
+        if _seg_match(seg, SEG_KEYWORDS_SISTEMA) and n_reviews >= 100:
+            return "sistema"
+        return "site"
+
+    # Tem site decente: decide por segmento + atividade
+    if _seg_match(seg, SEG_KEYWORDS_SISTEMA) and n_reviews >= 50:
+        return "sistema"
+    if _seg_match(seg, SEG_KEYWORDS_SITE):
+        return "site"
+    if _seg_match(seg, SEG_KEYWORDS_SISTEMA):
+        return "sistema"
+
+    # Default: SITE é a porta de entrada mais natural
+    return "site"
 
 
 # ═══════════════════════════════════════════════════════════

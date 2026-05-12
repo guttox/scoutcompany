@@ -155,6 +155,7 @@ def main():
             "id": pid,
             "nome": q.get("nome"),
             "segmento": segmento,
+            "servico": q.get("servico_recomendado") or "site",
             "whatsapp": numero,
             "mensagem": mensagem,
             "agendado_para": alvo.isoformat(timespec="seconds"),

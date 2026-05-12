@@ -16,8 +16,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import (
     DATA_DIR, MOCK_DIR, PROSPECTS_CSV, PROSPECT_FIELDS,
-    append_csv, env, is_blocked_brand, load_env, log,
-    proximas_cidades_rodizio, slugify, use_mock,
+    append_csv, definir_servico_recomendado, env, is_blocked_brand,
+    load_env, log, proximas_cidades_rodizio, slugify, use_mock,
 )
 
 DEFAULT_SEGMENTOS = [
@@ -161,9 +161,9 @@ def fetch_mock(segmentos, max_results):
 
 
 def normalize(prospect):
-    """Adiciona campos padrão (id, coletado_em) e garante todos os campos."""
+    """Adiciona campos padrão (id, coletado_em, servico_recomendado) e garante todos os campos."""
     nome = prospect.get("nome", "")
-    return {
+    base = {
         "id": slugify(nome),
         "nome": nome,
         "segmento": prospect.get("segmento", ""),
@@ -178,6 +178,8 @@ def normalize(prospect):
         "fonte": prospect.get("fonte", "unknown"),
         "coletado_em": datetime.now().isoformat(timespec="seconds"),
     }
+    base["servico_recomendado"] = definir_servico_recomendado(base)
+    return base
 
 
 def deduplicate(new_rows, existing_csv):

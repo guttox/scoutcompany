@@ -53,6 +53,7 @@ def sync():
             "data_abordagem": "",
             "status": "Novo",
             "observacao": "",
+            "servico": q.get("servico_recomendado", ""),
         })
 
     if novos:
