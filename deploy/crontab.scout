@@ -1,0 +1,24 @@
+# Scout — agendamento de jobs no host VPS (substitui os LaunchAgents do Mac)
+#
+# Como instalar (na VPS):
+#   crontab /opt/scout/deploy/crontab.scout
+#   crontab -l   # confere
+#
+# TZ é setado por linha (CRON_TZ funciona em cron moderno do Linux).
+CRON_TZ=America/Sao_Paulo
+
+# Dispatcher — processa fila de WhatsApp a cada 10 min (08-20h, seg-sex; sáb até 14h)
+*/10 8-19 * * 1-5   docker compose -f /opt/scout/docker-compose.yml exec -T scout python scripts/dispatcher.py >> /opt/scout/logs/cron-dispatcher.log 2>&1
+*/10 8-13 * * 6     docker compose -f /opt/scout/docker-compose.yml exec -T scout python scripts/dispatcher.py >> /opt/scout/logs/cron-dispatcher.log 2>&1
+
+# Daily — pipeline diário de prospecção (seg-sex 9h)
+3 9 * * 1-5         docker compose -f /opt/scout/docker-compose.yml exec -T scout python scripts/run_all.py >> /opt/scout/logs/cron-daily.log 2>&1
+
+# Weekly — relatório PDF + analyze (dom 20h)
+0 20 * * 0          docker compose -f /opt/scout/docker-compose.yml exec -T scout bash scripts/weekly_pipeline.sh >> /opt/scout/logs/cron-weekly.log 2>&1
+
+# Telegram responder bot — mantém vivo em supervisord interno do scout (já no CMD do container)
+# (Se quiser separar como container próprio, use docker compose com 2º service "scout-bot")
+
+# Lembrete único 02/06 — reativar análise de domingo
+23 10 2 6 *         docker compose -f /opt/scout/docker-compose.yml exec -T scout python scripts/lembrete_domingo.py >> /opt/scout/logs/cron-lembrete.log 2>&1
