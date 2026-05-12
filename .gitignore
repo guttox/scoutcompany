@@ -1,0 +1,8 @@
+.env
+data/*.csv
+mensagens/*.txt
+logs/*.log
+__pycache__/
+*.pyc
+.venv/
+venv/

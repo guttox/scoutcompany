@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Augusto Barbosa — One-pager</title>
+<style>
+  :root {
+    --navy:        #0A2540;
+    --navy-soft:   #163759;
+    --green:       #00B86B;
+    --green-deep:  #008F52;
+    --ink:         #111827;
+    --muted:       #4B5563;
+    --line:        #E5E7EB;
+    --bg:          #FFFFFF;
+    --chip-bg:     #F1F5F9;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  @page {
+    size: A4;
+    margin: 0;
+  }
+
+  .page {
+    width: 210mm;
+    height: 297mm;
+    padding: 16mm 14mm 12mm 14mm;
+    display: flex;
+    flex-direction: column;
+    gap: 7mm;
+  }
+
+  /* ===== HEADER ===== */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 6mm;
+    border-bottom: 2px solid var(--navy);
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .mark {
+    width: 52px;
+    height: 52px;
+    border-radius: 12px;
+    background: var(--navy);
+    color: #fff;
+    font-size: 28px;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    letter-spacing: -1px;
+    position: relative;
+    overflow: hidden;
+  }
+  .mark::after {
+    content: "";
+    position: absolute;
+    bottom: 0; left: 0;
+    width: 100%; height: 6px;
+    background: var(--green);
+  }
+
+  .name h1 {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.4px;
+    color: var(--navy);
+    line-height: 1.1;
+  }
+  .name p {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 3px;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+  }
+
+  .contact {
+    text-align: right;
+    font-size: 10.5px;
+    color: var(--ink);
+    line-height: 1.55;
+  }
+  .contact .label {
+    color: var(--muted);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-right: 4px;
+  }
+  .contact .date {
+    color: var(--green-deep);
+    font-weight: 700;
+    margin-top: 2px;
+  }
+
+  /* ===== TAGLINE ===== */
+  .tagline {
+    background: var(--navy);
+    color: #fff;
+    padding: 14px 18px;
+    border-radius: 8px;
+    border-left: 6px solid var(--green);
+  }
+  .tagline .kicker {
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--green);
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .tagline p {
+    font-size: 13.5px;
+    line-height: 1.45;
+    font-weight: 500;
+  }
+
+  /* ===== METRICS STRIP ===== */
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .metric {
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--green);
+    border-radius: 6px;
+    padding: 10px 12px;
+    text-align: left;
+  }
+  .metric .num {
+    font-size: 19px;
+    font-weight: 800;
+    color: var(--navy);
+    letter-spacing: -0.5px;
+    line-height: 1;
+  }
+  .metric .lbl {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+    margin-top: 5px;
+    line-height: 1.3;
+  }
+
+  /* ===== SECTIONS ===== */
+  .section h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--navy);
+    font-weight: 800;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section h2::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    background: var(--green);
+    border-radius: 2px;
+    display: inline-block;
+  }
+
+  /* Two-column block */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  ul.clean {
+    list-style: none;
+    padding: 0;
+  }
+  ul.clean li {
+    position: relative;
+    padding: 4px 0 4px 16px;
+    font-size: 10.5px;
+    color: var(--ink);
+    line-height: 1.45;
+  }
+  ul.clean li::before {
+    content: "";
+    position: absolute;
+    left: 2px;
+    top: 10px;
+    width: 6px;
+    height: 6px;
+    background: var(--green);
+    border-radius: 50%;
+  }
+  ul.clean li strong { color: var(--navy); font-weight: 700; }
+
+  /* Stack chips */
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .chip {
+    background: var(--chip-bg);
+    color: var(--navy);
+    font-size: 10px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    font-weight: 600;
+    border: 1px solid var(--line);
+  }
+  .chip.accent {
+    background: var(--navy);
+    color: #fff;
+    border-color: var(--navy);
+  }
+
+  /* Deliverables grid */
+  .deliver-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  .deliver {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 9px 12px;
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+  }
+  .deliver .dot {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    background: var(--navy);
+    color: var(--green);
+    font-size: 12px;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+  }
+  .deliver .txt {
+    font-size: 10.5px;
+    color: var(--ink);
+    line-height: 1.4;
+  }
+  .deliver .txt strong {
+    color: var(--navy);
+    font-weight: 700;
+    display: block;
+    font-size: 10.8px;
+    margin-bottom: 1px;
+  }
+
+  /* Footer signature */
+  footer {
+    margin-top: auto;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 9.5px;
+    color: var(--muted);
+  }
+  footer .sig {
+    color: var(--navy);
+    font-weight: 700;
+  }
+  footer .accent {
+    color: var(--green-deep);
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HEADER -->
+  <header>
+    <div class="brand">
+      <div class="mark">A</div>
+      <div class="name">
+        <h1>Augusto Barbosa</h1>
+        <p>Construtor de Sistemas &amp; Operações Digitais com IA</p>
+      </div>
+    </div>
+    <div class="contact">
+      <div><span class="label">Tel</span>+55 11 94067-0464</div>
+      <div><span class="label">IG</span>@amantiusassessoria</div>
+      <div class="date">Maio 2026</div>
+    </div>
+  </header>
+
+  <!-- TAGLINE -->
+  <div class="tagline">
+    <div class="kicker">O que eu faço</div>
+    <p>Construo sistemas, automações e operações digitais completas usando IA — do zero ao funcionando, em dias.</p>
+  </div>
+
+  <!-- METRICS -->
+  <div class="metrics">
+    <div class="metric">
+      <div class="num">7</div>
+      <div class="lbl">Clientes ativos<br>gerenciados</div>
+    </div>
+    <div class="metric">
+      <div class="num">R$ 5.850</div>
+      <div class="lbl">MRR atual<br>(receita recorrente)</div>
+    </div>
+    <div class="metric">
+      <div class="num">184</div>
+      <div class="lbl">Agentes de IA<br>especializados</div>
+    </div>
+    <div class="metric">
+      <div class="num">24/7</div>
+      <div class="lbl">Sistema rodando<br>em produção</div>
+    </div>
+  </div>
+
+  <!-- BUILT -->
+  <div class="section">
+    <h2>O que já construí</h2>
+    <div class="two-col">
+      <ul class="clean">
+        <li><strong>Sistema de gestão de clientes</strong> — app desktop completo com IA integrada</li>
+        <li><strong>Pipeline de geração de conteúdo</strong> automático com squads de IA</li>
+        <li><strong>Landing page com quiz funil</strong> e Meta Pixel configurado</li>
+      </ul>
+      <ul class="clean">
+        <li><strong>Bot de gestão operacional</strong> no Telegram para a operação</li>
+        <li><strong>Sistema de prospecção automatizada</strong> (Scout) — captação ativa</li>
+        <li><strong>Geração semanal de posts</strong> rodando em piloto automático</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- STACK -->
+  <div class="section">
+    <h2>Stack técnico</h2>
+    <div class="chips">
+      <span class="chip accent">Claude Code · Opus 4.7</span>
+      <span class="chip">Electron + React</span>
+      <span class="chip">SQLite</span>
+      <span class="chip">Python</span>
+      <span class="chip">Google Places API</span>
+      <span class="chip">Telegram Bot API</span>
+      <span class="chip">Meta Pixel + Quiz Funil</span>
+      <span class="chip">10+ MCPs configurados</span>
+      <span class="chip">Puppeteer / Playwright</span>
+      <span class="chip">Node.js</span>
+    </div>
+  </div>
+
+  <!-- DELIVERY -->
+  <div class="section">
+    <h2>O que posso entregar</h2>
+    <div class="deliver-grid">
+      <div class="deliver">
+        <div class="dot">1</div>
+        <div class="txt"><strong>Sistemas de gestão customizados</strong>Apps internos sob medida com IA integrada — desktop ou web.</div>
+      </div>
+      <div class="deliver">
+        <div class="dot">2</div>
+        <div class="txt"><strong>Automação de operações com IA</strong>Pipelines que rodam sozinhos e substituem trabalho repetitivo.</div>
+      </div>
+      <div class="deliver">
+        <div class="dot">3</div>
+        <div class="txt"><strong>Captação e prospecção automatizada</strong>Sistemas que prospectam, qualificam e organizam leads sem operador.</div>
+      </div>
+      <div class="deliver">
+        <div class="dot">4</div>
+        <div class="txt"><strong>Conteúdo gerado por IA em escala</strong>Squads de agentes produzindo posts, copies e relatórios.</div>
+      </div>
+      <div class="deliver">
+        <div class="dot">5</div>
+        <div class="txt"><strong>Bots e integrações</strong>Telegram, WhatsApp, APIs internas — comunicação automatizada da operação.</div>
+      </div>
+      <div class="deliver">
+        <div class="dot">6</div>
+        <div class="txt"><strong>Implementação completa em dias</strong>Do zero ao funcionando — não meses de roadmap.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <footer>
+    <div><span class="sig">Augusto Barbosa</span> · <span class="accent">Construtor de operações digitais com IA</span></div>
+    <div>+55 11 94067-0464 · @amantiusassessoria</div>
+  </footer>
+
+</div>
+</body>
+</html>

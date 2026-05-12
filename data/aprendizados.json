@@ -1,0 +1,27 @@
+{
+  "atualizado_em": "2026-05-11T18:07:05",
+  "periodo": {
+    "inicio": "2026-05-04",
+    "fim": "2026-05-11"
+  },
+  "metricas": {
+    "disparos": 0,
+    "respostas": 0,
+    "taxa_resposta": 0,
+    "leads_quentes": 1,
+    "fechamentos": 0
+  },
+  "segmentos_ranking": [],
+  "melhores_horarios": {
+    "18h": 3
+  },
+  "icp": {
+    "n_fechados_analisados": 0,
+    "segmentos_mais_fecharam": [],
+    "score_medio_fechados": null,
+    "rating_medio_fechados": null,
+    "pct_sem_site": null,
+    "pct_whatsapp": null
+  },
+  "ajustes_aplicados": []
+}

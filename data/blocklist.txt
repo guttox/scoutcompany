@@ -1,0 +1,228 @@
+# Scout — blocklist de marcas grandes
+# Uma marca por linha. Linhas vazias e # comentários são ignoradas.
+# Match é por SUBSTRING case-insensitive no nome do prospect.
+# Ex: "Droga Raia" bate "Droga Raia 0123 - Centro" e "DROGA RAIA UNIDADE X"
+#
+# Critério: redes nacionais com 50+ unidades. Não convertem como prospect
+# (têm marketing centralizado, fornecedor próprio de site, decisão fora da unidade).
+# ─────────────────────────────────────────────
+
+# ===== FARMÁCIAS / DROGARIAS =====
+Droga Raia
+Drogasil
+Drogaria São Paulo
+Drogaria Sao Paulo
+Pague Menos
+Panvel
+Drogaria Onofre
+Drogaria Pacheco
+Drogarias Pacheco
+Nissei
+Drogaria Araujo
+Drogaria Araújo
+Big Ben
+Indianapolis
+Pague Menos
+Ultrafarma
+
+# ===== PETSHOPS / VETERINÁRIAS REDE =====
+Petz
+Cobasi
+Petlove
+Pet Center Marginal
+Petcenter
+Mundo Pet
+Cão Cidadão
+Pet Shop Pet & Cia
+
+# ===== FAST FOOD / RESTAURANTES REDE =====
+McDonald's
+McDonalds
+Mc Donald's
+Burger King
+Subway
+KFC
+Bob's
+Bobs
+Habib's
+Habibs
+Giraffas
+Pizza Hut
+Domino's
+Dominos
+Spoleto
+China in Box
+Outback
+Madero
+Coco Bambu
+Mania de Churrasco
+Vivenda do Camarão
+Vivenda do Camarao
+Frango Assado
+Patroni Pizza
+Patroni
+Ragazzo
+Divino Fogão
+Divino Fogao
+Cabana Burger
+Cabana
+Brasil Burger
+Pizza Crek
+Cacau Show
+Brasil Cacau
+Chocolates Brasil Cacau
+Sodiê
+Sodie
+Casa do Pão de Queijo
+Casa do Pao de Queijo
+Casa Suiça
+Casa Suica
+Hot Pao
+
+# ===== MERCADOS / SUPERMERCADOS =====
+# (Removidos termos genéricos: "Extra" puro batia em Extra Ótica;
+#  "Big" puro batia em qualquer Big Beer/etc; "Mateus" puro idem.
+#  Usa formas qualificadas pra evitar falsos positivos.)
+Casas Bahia
+Extra Hipermercado
+Extra Supermercado
+Extra Mercado
+Carrefour
+Pão de Açúcar
+Pao de Acucar
+Atacadão
+Atacadao
+Assaí Atacadista
+Assai Atacadista
+Sam's Club
+Sams Club
+Walmart
+Dia Supermercado
+Hirota Food
+Mart Minas
+Mix Mateus
+Supermercados Mateus
+Bompreço
+Bompreco
+Sonda Supermercados
+GBarbosa
+Maxxi Atacado
+Tenda Atacado
+
+# ===== LOJAS DE DEPARTAMENTO / MAGAZINE =====
+Magazine Luiza
+Magalu
+Lojas Americanas
+Americanas
+Renner
+Lojas Renner
+C&A
+C & A
+Riachuelo
+Lojas Riachuelo
+Marisa
+Lojas Marisa
+Hering
+Pernambucanas
+Le Lis Blanc
+Avon
+Track and Field
+
+# ===== ACADEMIAS REDE =====
+Smart Fit
+SmartFit
+Smart-Fit
+Bio Ritmo
+BioRitmo
+Bodytech
+Cia Athletica
+Selfit
+Just Fit
+JustFit
+Fórmula Academia
+Formula Academia
+Pratique Fitness
+Bluefit
+
+# ===== ÓTICAS REDE =====
+Óticas Carol
+Oticas Carol
+Otica do Povo
+Ótica do Povo
+Ótica Diniz
+Otica Diniz
+Chilli Beans
+Oticas Mundial
+
+# ===== POSTOS / CONVENIÊNCIA =====
+Shell
+Ipiranga
+BR Petrobras
+Posto BR
+Ale Posto
+Petrobras
+AmPm
+am pm
+Select
+
+# ===== MATERIAL DE CONSTRUÇÃO REDE =====
+Telhanorte
+Leroy Merlin
+C&C Casa e Construção
+C&C Construção
+Center Castilho
+Center Construção
+
+# ===== CAFÉS / PADARIAS REDE =====
+Starbucks
+Casa do Pão de Queijo
+
+# ===== TECNOLOGIA / ELETRO =====
+Fast Shop
+Ponto Frio
+Submarino
+
+# ===== ESTÉTICA / BELEZA REDE =====
+Espaço Laser
+Espaco Laser
+Onodera Estética
+Onodera Estetica
+Sodirelli
+Doutor Hernandez
+Beauty Color
+
+# ===== AUTOMOTIVO =====
+Localiza
+Movida
+Unidas
+Tip Top
+
+# ===== EDUCAÇÃO REDE =====
+CCAA
+Wizard
+Yázigi
+Cultura Inglesa
+Cebran
+Microlins
+Senac
+Senai
+
+# ===== BANCOS / SERVIÇOS FIN =====
+Banco do Brasil
+Caixa Econômica
+Caixa Economica
+Bradesco
+Itaú
+Itau
+Santander
+Banco Inter
+Sicredi
+Sicoob
+
+# ===== UTILITIES (gás, água) =====
+Comgás
+Comgas
+Sabesp
+Eletropaulo
+Enel
+CPFL

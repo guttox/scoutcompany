@@ -1,0 +1,599 @@
+"""Funções compartilhadas entre os scripts."""
+import csv
+import json
+import os
+import sys
+from pathlib import Path
+from datetime import datetime, timedelta
+
+ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = ROOT / "data"
+MENS_DIR = ROOT / "mensagens"
+MOCK_DIR = ROOT / "mock"
+LOG_DIR = ROOT / "logs"
+CONVERSAS_DIR = ROOT / "conversas"
+
+PROSPECTS_CSV = DATA_DIR / "prospects.csv"
+QUALIFICADOS_CSV = DATA_DIR / "qualificados.csv"
+PIPELINE_CSV = DATA_DIR / "pipeline.csv"
+FILA_PATH = DATA_DIR / "fila_envio.json"
+CONFIG_PATH = DATA_DIR / "config.json"
+DISPAROS_LOG = LOG_DIR / "disparos.log"
+VOLUME_LOG = LOG_DIR / "volume.log"
+
+PROSPECT_FIELDS = [
+    "id", "nome", "segmento", "endereco", "cidade",
+    "telefone", "instagram", "site", "rating", "user_ratings_total",
+    "place_id", "fonte", "coletado_em",
+]
+
+QUALIFICADO_FIELDS = PROSPECT_FIELDS + [
+    "score", "situacao",
+    # Enriquecimento de contato (Etapa 2.5)
+    "tem_whatsapp",      # sim | nao | nao_verificado
+    "whatsapp_link",     # https://wa.me/55... (vazio se inválido)
+    "email",             # email encontrado
+    "tem_email",         # sim | nao
+    "email_fonte",       # site | instagram | (vazio)
+    "prioridade",        # 1=whatsapp, 2=email, 3=ligar, 4=sem_canal
+]
+
+PIPELINE_FIELDS = [
+    "id", "nome", "segmento", "contato", "data_abordagem",
+    "status", "observacao",
+    # Tracking do site scoutcompany.com.br
+    "data_envio_site",   # quando o link foi enviado pro prospect (ISO 8601)
+    "site_acessado",     # "sim" / "nao" / "" — atualização manual por enquanto
+]
+
+
+def load_env():
+    """Carrega .env manualmente (sem dependência externa)."""
+    env_path = ROOT / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key and val and key not in os.environ:
+            os.environ[key] = val
+
+
+def env(key, default=None):
+    return os.environ.get(key, default)
+
+
+def log(msg, level="INFO"):
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    line = f"[{datetime.now().isoformat(timespec='seconds')}] {level} {msg}"
+    print(line, flush=True)
+    with open(LOG_DIR / f"{datetime.now():%Y-%m-%d}.log", "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
+def read_csv(path, fields=None):
+    if not path.exists():
+        return []
+    with open(path, encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        return list(reader)
+
+
+def write_csv(path, rows, fields):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow({k: r.get(k, "") for k in fields})
+
+
+def append_csv(path, rows, fields):
+    """Adiciona linhas ao CSV (cria com header se não existir)."""
+    exists = path.exists()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        if not exists:
+            writer.writeheader()
+        for r in rows:
+            writer.writerow({k: r.get(k, "") for k in fields})
+
+
+def slugify(text):
+    """Converte nome em slug seguro pra nome de arquivo."""
+    import re
+    import unicodedata
+    text = unicodedata.normalize("NFKD", str(text))
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    text = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
+    return text or "sem-nome"
+
+
+def use_mock():
+    return env("USE_MOCK", "0") == "1"
+
+
+def is_truthy(val):
+    return str(val).strip().lower() in ("1", "true", "sim", "yes", "y")
+
+
+# ─────────────────────────────────────────────
+# Blocklist de marcas grandes (~80 redes nacionais)
+# Arquivo editável: data/blocklist.txt
+# ─────────────────────────────────────────────
+_BLOCKLIST_CACHE = None
+_BLOCKLIST_PATH = DATA_DIR / "blocklist.txt"
+
+
+def _load_blocklist():
+    """Lê data/blocklist.txt e retorna lista de marcas em lowercase.
+    Cache em memória — só relê se chamar reload_blocklist()."""
+    global _BLOCKLIST_CACHE
+    if _BLOCKLIST_CACHE is not None:
+        return _BLOCKLIST_CACHE
+    brands = []
+    if _BLOCKLIST_PATH.exists():
+        for line in _BLOCKLIST_PATH.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                brands.append(line.lower())
+    _BLOCKLIST_CACHE = brands
+    return brands
+
+
+def reload_blocklist():
+    """Força releitura do arquivo (útil em scripts long-running)."""
+    global _BLOCKLIST_CACHE
+    _BLOCKLIST_CACHE = None
+    return _load_blocklist()
+
+
+import re as _re
+
+def is_blocked_brand(nome):
+    """True se o nome do prospect contém uma marca da blocklist como PALAVRA INTEIRA
+    (não substring). Evita falsos positivos tipo 'Extra' bater em 'Extra Ótica'
+    quando o blocklist tem 'Extra Supermercado'.
+
+    Ex: 'DROGA RAIA 0123 - Centro' bate 'droga raia' ✅
+         'Extra Ótica Guarulhos' NÃO bate 'extra supermercado' ✅
+         'Magazine Luiza Filial' bate 'magazine luiza' ✅"""
+    if not nome:
+        return False
+    n = str(nome).lower()
+    for brand in _load_blocklist():
+        # Word boundary: marca cercada por não-letras (início, fim, espaço, traço, etc).
+        # Inclui acentos no charset pra não quebrar em "ótica", "ação", etc.
+        pat = r'(^|[^a-záàâãéêíóôõúüç0-9])' + _re.escape(brand) + r'($|[^a-záàâãéêíóôõúüç0-9])'
+        if _re.search(pat, n):
+            return True
+    return False
+
+
+# ═══════════════════════════════════════════════════════════
+# JANELAS DE ENVIO POR SEGMENTO
+# ═══════════════════════════════════════════════════════════
+# Cada segmento tem 1 ou 2 janelas (hora_inicio, hora_fim) em formato 24h
+# Fim de semana: sáb até 14h só, dom nunca
+SEGMENT_WINDOWS = {
+    "restaurante":  [(10, 11), (15, 16)],
+    "delivery":     [(10, 11), (15, 16)],
+    "pizzaria":     [(10, 11), (15, 16)],
+    "lanchonete":   [(10, 11), (15, 16)],
+    "padaria":      [(10, 11), (15, 16)],
+    "salao":        [(9, 10), (19, 20)],
+    "barbearia":    [(9, 10), (19, 20)],
+    "estetica":     [(9, 10), (19, 20)],
+    "clinica":      [(8, 9)],
+    "dentista":     [(8, 9)],
+    "odonto":       [(8, 9)],
+    "saude":        [(8, 9)],
+    "petshop":      [(10, 11)],
+    "pet":          [(10, 11)],
+    "veterinario":  [(10, 11)],
+    "loja":         [(9, 10)],
+    "comercio":     [(9, 10)],
+    "default":      [(9, 10)],
+}
+
+# Hard limits que NUNCA são violadas
+HORA_MIN_GLOBAL = 8
+HORA_MAX_GLOBAL = 20
+SAB_HORA_MAX = 14  # sábado: só até 14h
+MAX_DISPAROS_DIA_DEFAULT = 25
+INTERVALO_MIN_SEG = 180  # 3 min
+INTERVALO_MAX_SEG = 300  # 5 min
+
+
+def _windows_para_segmento(segmento):
+    """Match segmento → janelas. Substring lowercase."""
+    if not segmento:
+        return SEGMENT_WINDOWS["default"]
+    s = str(segmento).lower()
+    for key, windows in SEGMENT_WINDOWS.items():
+        if key == "default":
+            continue
+        if key in s:
+            return windows
+    return SEGMENT_WINDOWS["default"]
+
+
+def next_send_window(segmento, agora=None):
+    """Retorna datetime ISO da PRÓXIMA janela hábil de envio para esse segmento.
+
+    Regras:
+      - Domingo: pula pra segunda
+      - Sábado após 14h: pula pra segunda
+      - Antes das 8h ou depois das 20h: pula
+      - Se há janela ainda hoje, usa o INÍCIO da janela
+      - Se janela passou hoje, tenta próxima janela do mesmo dia ou próximo dia útil
+    """
+    if agora is None:
+        agora = datetime.now()
+    windows = _windows_para_segmento(segmento)
+
+    for d_offset in range(0, 8):
+        dia = agora + timedelta(days=d_offset)
+        wd = dia.weekday()  # 0=seg ... 5=sab, 6=dom
+        if wd == 6:
+            continue  # domingo, nunca
+        for (h_ini, h_fim) in windows:
+            # respeita limite global
+            h_ini_eff = max(h_ini, HORA_MIN_GLOBAL)
+            h_fim_eff = min(h_fim, HORA_MAX_GLOBAL)
+            if wd == 5:  # sábado
+                if h_ini_eff >= SAB_HORA_MAX:
+                    continue
+                h_fim_eff = min(h_fim_eff, SAB_HORA_MAX)
+            if h_fim_eff <= h_ini_eff:
+                continue
+            alvo = dia.replace(hour=h_ini_eff, minute=0, second=0, microsecond=0)
+            if alvo <= agora:
+                continue
+            return alvo
+    # fallback (não deveria chegar aqui)
+    return agora + timedelta(days=1)
+
+
+def is_horario_habil(agora=None):
+    """True se está em janela global (8h-20h, seg-sex; sáb até 14h)."""
+    if agora is None:
+        agora = datetime.now()
+    wd = agora.weekday()
+    if wd == 6:  # domingo
+        return False
+    if wd == 5 and agora.hour >= SAB_HORA_MAX:
+        return False
+    return HORA_MIN_GLOBAL <= agora.hour < HORA_MAX_GLOBAL
+
+
+# ═══════════════════════════════════════════════════════════
+# FILA DE ENVIO (data/fila_envio.json)
+# ═══════════════════════════════════════════════════════════
+def read_fila():
+    if not FILA_PATH.exists():
+        return {"items": []}
+    try:
+        return json.loads(FILA_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        log(f"fila corrompida em {FILA_PATH}, resetando", "WARN")
+        return {"items": []}
+
+
+def write_fila(fila):
+    FILA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    FILA_PATH.write_text(json.dumps(fila, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def enqueue_dispatch(item):
+    """Adiciona item à fila se ainda não estiver. Item precisa ter id e whatsapp."""
+    fila = read_fila()
+    ids = {x.get("id") for x in fila["items"]}
+    if item.get("id") in ids:
+        return False
+    fila["items"].append(item)
+    write_fila(fila)
+    return True
+
+
+def log_disparo(line):
+    """Appenda no logs/disparos.log."""
+    DISPAROS_LOG.parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().isoformat(timespec="seconds")
+    with open(DISPAROS_LOG, "a", encoding="utf-8") as f:
+        f.write(f"[{stamp}] {line}\n")
+
+
+# ═══════════════════════════════════════════════════════════
+# EVOLUTION API CLIENT
+# ═══════════════════════════════════════════════════════════
+EVOLUTION_URL_DEFAULT = "http://localhost:8080"
+EVOLUTION_INSTANCE_DEFAULT = "scout-wa"
+
+
+def _evolution_cfg():
+    return {
+        "url": env("EVOLUTION_URL", EVOLUTION_URL_DEFAULT).rstrip("/"),
+        "apikey": env("EVOLUTION_APIKEY", "scout-evolution-key"),
+        "instance": env("EVOLUTION_INSTANCE", EVOLUTION_INSTANCE_DEFAULT),
+    }
+
+
+def dispatch_dry_run():
+    """Resolve modo de envio. Precedência:
+      1) DISPATCH_MODE=LIVE → False (envia)
+      2) DISPATCH_MODE=DRY  → True
+      3) Fallback: SCOUT_DRY_RUN (1=dry, 0=live)
+      Default: True (seguro)
+    """
+    mode = (env("DISPATCH_MODE", "") or "").strip().upper()
+    if mode == "LIVE":
+        return False
+    if mode == "DRY":
+        return True
+    return is_truthy(env("SCOUT_DRY_RUN", "1"))
+
+
+def send_whatsapp_via_evolution(numero, texto, dry_run=None):
+    """Envia mensagem WhatsApp via Evolution API.
+
+    - numero: string só com dígitos, com DDI (ex '5511940670464')
+    - texto: corpo da mensagem
+    - dry_run: se None, resolve via dispatch_dry_run() (DISPATCH_MODE + SCOUT_DRY_RUN).
+
+    Retorna dict {ok: bool, status: str, response: any, dry_run: bool}.
+    """
+    import urllib.request as _urlreq
+    cfg = _evolution_cfg()
+    if dry_run is None:
+        dry_run = dispatch_dry_run()
+
+    numero_limpo = "".join(c for c in str(numero) if c.isdigit())
+    if not numero_limpo:
+        return {"ok": False, "status": "numero_vazio", "response": None, "dry_run": dry_run}
+
+    if dry_run:
+        log_disparo(f"DRY_RUN → {numero_limpo}: {texto[:80]!r}")
+        return {"ok": True, "status": "dry_run", "response": None, "dry_run": True}
+
+    url = f"{cfg['url']}/message/sendText/{cfg['instance']}"
+    payload = json.dumps({"number": numero_limpo, "text": texto}).encode("utf-8")
+    req = _urlreq.Request(
+        url,
+        data=payload,
+        headers={"apikey": cfg["apikey"], "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with _urlreq.urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            ok = 200 <= resp.status < 300
+            log_disparo(f"{'OK' if ok else 'FAIL'} http={resp.status} → {numero_limpo}: {texto[:60]!r}")
+            return {"ok": ok, "status": f"http_{resp.status}", "response": body, "dry_run": False}
+    except Exception as e:
+        log_disparo(f"FAIL exc → {numero_limpo}: {e}")
+        return {"ok": False, "status": "exception", "response": str(e), "dry_run": False}
+
+
+# ═══════════════════════════════════════════════════════════
+# HISTÓRICO DE CONVERSAS (~/scout/conversas/[numero].json)
+# ═══════════════════════════════════════════════════════════
+def _conversa_path(numero):
+    CONVERSAS_DIR.mkdir(parents=True, exist_ok=True)
+    digits = "".join(c for c in str(numero) if c.isdigit())
+    return CONVERSAS_DIR / f"{digits}.json"
+
+
+def load_conversa(numero):
+    p = _conversa_path(numero)
+    if not p.exists():
+        return {"numero": numero, "mensagens": [], "lead_quente": False, "lead_quente_em": None}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {"numero": numero, "mensagens": [], "lead_quente": False, "lead_quente_em": None}
+
+
+def save_conversa(numero, conversa):
+    p = _conversa_path(numero)
+    # mantém só últimas 50 mensagens em disco
+    conversa["mensagens"] = conversa.get("mensagens", [])[-50:]
+    p.write_text(json.dumps(conversa, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# ═══════════════════════════════════════════════════════════
+# ESCALONAMENTO DE VOLUME (aquecimento do número)
+# ═══════════════════════════════════════════════════════════
+# Semana 1 (dias 1-7):   25/dia — aquecimento
+# Semana 2 (dias 8-14):  50/dia
+# Semana 3 (dias 15-21): 80/dia
+# Semana 4+ (dia 22+):   100/dia
+# Auto-throttle: se falha > 30% no dia ANTERIOR, reduz 20% no dia atual
+VOLUME_POR_SEMANA = {1: 25, 2: 50, 3: 80, 4: 100}
+THROTTLE_FALHA_PCT = 30.0
+THROTTLE_REDUCAO = 0.20
+
+
+def read_config():
+    if not CONFIG_PATH.exists():
+        return {}
+    try:
+        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def write_config(cfg):
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    cfg["atualizado_em"] = datetime.now().isoformat(timespec="seconds")
+    CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def marcar_primeiro_disparo_se_preciso():
+    """Se ainda não há primeiro_disparo registrado, grava hoje.
+    Chamado dentro do dispatcher quando há tentativa real."""
+    cfg = read_config()
+    if not cfg.get("primeiro_disparo"):
+        cfg["primeiro_disparo"] = datetime.now().date().isoformat()
+        write_config(cfg)
+    return cfg.get("primeiro_disparo")
+
+
+# ═══════════════════════════════════════════════════════════
+# RODÍZIO DE CIDADES (busca em São Paulo expandido)
+# ═══════════════════════════════════════════════════════════
+CIDADES_RODIZIO_DEFAULT = [
+    "São Paulo", "Guarulhos", "Campinas", "Santo André",
+    "São Bernardo do Campo", "Osasco", "Sorocaba", "Ribeirão Preto",
+    "São José dos Campos", "Santos", "Mauá", "Mogi das Cruzes",
+    "Diadema", "Carapicuíba", "Itaquaquecetuba",
+]
+
+
+def _ler_lista_cidades():
+    raw = env("CIDADES_RODIZIO", "")
+    if not raw:
+        return list(CIDADES_RODIZIO_DEFAULT)
+    cidades = [c.strip() for c in raw.split(",") if c.strip()]
+    return cidades or list(CIDADES_RODIZIO_DEFAULT)
+
+
+def proximas_cidades_rodizio(n=None):
+    """Devolve as próximas `n` cidades em rodízio circular e ATUALIZA config.json
+    para a próxima chamada começar onde parou.
+
+    Estrutura em config.json:
+      "rodizio": {
+        "ultimo_indice_fim": int,        # índice (exclusivo) onde a última rodada parou
+        "ultimas_cidades": [str, ...],   # cidades que foram usadas na última rodada
+        "atualizado_em": ISO
+      }
+    """
+    cidades = _ler_lista_cidades()
+    if n is None:
+        try:
+            n = int(env("CIDADES_POR_RODADA", "3"))
+        except Exception:
+            n = 3
+    n = max(1, min(n, len(cidades)))
+
+    cfg = read_config()
+    rod = cfg.get("rodizio", {})
+    start = int(rod.get("ultimo_indice_fim", 0)) % len(cidades)
+
+    selecionadas = []
+    idx = start
+    for _ in range(n):
+        selecionadas.append(cidades[idx])
+        idx = (idx + 1) % len(cidades)
+
+    cfg["rodizio"] = {
+        "ultimo_indice_fim": idx,
+        "ultimas_cidades": selecionadas,
+        "atualizado_em": datetime.now().isoformat(timespec="seconds"),
+        "total_cidades_no_pool": len(cidades),
+    }
+    write_config(cfg)
+    return selecionadas
+
+
+def calcular_semana_atual():
+    """Retorna 1, 2, 3 ou 4 (cap em 4).
+    Se ainda não houve primeiro_disparo, retorna 1."""
+    cfg = read_config()
+    pd = cfg.get("primeiro_disparo")
+    if not pd:
+        return 1
+    try:
+        d0 = datetime.fromisoformat(pd).date()
+    except Exception:
+        try:
+            d0 = datetime.strptime(pd, "%Y-%m-%d").date()
+        except Exception:
+            return 1
+    delta_dias = (datetime.now().date() - d0).days
+    # dia 1-7 → semana 1, dia 8-14 → semana 2, ...
+    semana = (delta_dias // 7) + 1
+    return min(max(semana, 1), 4)
+
+
+def _stats_volume_dia(data_iso):
+    """Conta tentativas/sucesso/falha do dia data_iso (YYYY-MM-DD) lendo disparos.log."""
+    if not DISPAROS_LOG.exists():
+        return {"tentativas": 0, "sucesso": 0, "falha": 0, "dryrun": 0}
+    s = {"tentativas": 0, "sucesso": 0, "falha": 0, "dryrun": 0}
+    with open(DISPAROS_LOG, encoding="utf-8") as f:
+        for line in f:
+            if not line.startswith(f"[{data_iso}"):
+                continue
+            if " RODADA " in line:
+                continue
+            if "OK " in line:
+                s["sucesso"] += 1
+                s["tentativas"] += 1
+            elif "FAIL " in line:
+                s["falha"] += 1
+                s["tentativas"] += 1
+            elif "DRY_RUN " in line:
+                s["dryrun"] += 1
+                s["tentativas"] += 1
+    return s
+
+
+def calcular_max_disparos_hoje():
+    """Retorna o limite ajustado para hoje considerando:
+      - Semana de aquecimento
+      - Auto-throttle: -20% se falha > 30% no dia anterior
+
+    Override via env MAX_DISPAROS_DIA → ignora cálculo automático.
+    """
+    override = env("MAX_DISPAROS_DIA")
+    if override and override.isdigit():
+        return int(override)
+
+    semana = calcular_semana_atual()
+    base = VOLUME_POR_SEMANA.get(semana, VOLUME_POR_SEMANA[4])
+
+    # Throttle: olha dia anterior
+    ontem = (datetime.now().date() - timedelta(days=1)).isoformat()
+    stats_ontem = _stats_volume_dia(ontem)
+    if stats_ontem["tentativas"] >= 5:  # só aplica se houver volume mínimo
+        pct_falha = 100.0 * stats_ontem["falha"] / stats_ontem["tentativas"]
+        if pct_falha > THROTTLE_FALHA_PCT:
+            reduzido = int(base * (1 - THROTTLE_REDUCAO))
+            log(f"AUTO-THROTTLE: falha ontem {pct_falha:.0f}% > {THROTTLE_FALHA_PCT}% "
+                f"→ reduzindo {base} → {reduzido}", "WARN")
+            return reduzido
+    return base
+
+
+def registrar_volume_dia(extras=None):
+    """Appenda no volume.log um resumo do dia atual.
+
+    extras: dict opcional de campos adicionais ('reducao', 'dry_run', etc).
+    """
+    VOLUME_LOG.parent.mkdir(parents=True, exist_ok=True)
+    hoje = datetime.now().date().isoformat()
+    semana = calcular_semana_atual()
+    stats = _stats_volume_dia(hoje)
+    max_dia = calcular_max_disparos_hoje()
+    parts = [
+        f"[{hoje}]",
+        f"semana={semana}",
+        f"max={max_dia}",
+        f"tentativas={stats['tentativas']}",
+        f"sucesso={stats['sucesso']}",
+        f"falha={stats['falha']}",
+        f"dryrun={stats['dryrun']}",
+    ]
+    if extras:
+        for k, v in extras.items():
+            parts.append(f"{k}={v}")
+    line = " ".join(parts) + "\n"
+    with open(VOLUME_LOG, "a", encoding="utf-8") as f:
+        f.write(line)
