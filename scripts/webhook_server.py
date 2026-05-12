@@ -28,7 +28,8 @@ from flask import Flask, jsonify, request
 import whatsapp_responder
 
 app = Flask(__name__)
-PORT = int(env("WEBHOOK_PORT", "5005"))
+# Railway injeta $PORT em runtime; local usa WEBHOOK_PORT (default 5005)
+PORT = int(env("PORT") or env("WEBHOOK_PORT", "5005"))
 
 
 def _extrai_numero(remote_jid):

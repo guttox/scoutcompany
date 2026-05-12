@@ -1,8 +1,38 @@
+# Segredos
 .env
+.env.*
+!.env.example
+
+# Dados operacionais (locais ao Mac)
 data/*.csv
+data/*.json
+!data/blocklist.txt
 mensagens/*.txt
-logs/*.log
+conversas/
+logs/
+relatorios/
+.pids/
+qrcode.png
+
+# Assets sensíveis (Scout business)
+brand/whatsapp-cover.png
+brand/whatsapp-profile.png
+
+# Python
 __pycache__/
 *.pyc
 .venv/
 venv/
+*.egg-info/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# IDEs
+.vscode/
+.idea/
+
+# Evolution (Docker volumes — locais)
+evolution/postgres_data/
+evolution/redis_data/
