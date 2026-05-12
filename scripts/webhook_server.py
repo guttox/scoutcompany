@@ -19,7 +19,9 @@ import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _common import dispatch_dry_run, env, load_env, log, mensagem_ja_processada
+from _common import (
+    dispatch_dry_run, env, load_conversa, load_env, log, mensagem_ja_processada,
+)
 
 load_env()
 
@@ -38,6 +40,41 @@ def _extrai_numero(remote_jid):
         return ""
     base = remote_jid.split("@", 1)[0]
     return "".join(c for c in base if c.isdigit())
+
+
+def _is_truthy_flag(v):
+    """Aceita True, 'true', 'True', 1, '1' como verdadeiro. Cobre bug onde
+    Evolution às vezes manda fromMe como string ao invés de bool."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "1", "yes")
+    return False
+
+
+def _is_eco_da_nossa_resposta(numero, texto_recebido):
+    """Defesa nº3: se o texto recebido é IDÊNTICO à última resposta que enviamos
+    pra esse número (nas últimas 5 msgs do histórico), é eco/loopback — ignora.
+
+    Cobre o cenário onde Evolution emite MESSAGES_UPSERT pra nossa própria
+    mensagem enviada SEM marcar fromMe (bug observado em v2.3.7).
+    """
+    try:
+        conv = load_conversa(numero)
+    except Exception:
+        return False
+    if not texto_recebido:
+        return False
+    txt_recv = texto_recebido.strip()
+    # Compara contra últimas 5 mensagens assistant
+    assistants = [m for m in conv.get("mensagens", [])
+                  if m.get("role") == "assistant"][-5:]
+    for m in assistants:
+        if (m.get("content") or "").strip() == txt_recv:
+            return True
+    return False
 
 
 def _extrai_texto(payload_message):
@@ -103,12 +140,30 @@ def webhook_whatsapp():
 
     key = data.get("key") or {}
     remote_jid = key.get("remoteJid") or ""
-    from_me = bool(key.get("fromMe"))
+    participant = key.get("participant") or ""
     is_group = "@g.us" in remote_jid
     message_id = key.get("id") or ""
 
+    # ───────────────────────────────────────────────────────────
+    # CAMADA 1 — fromMe (robusto: aceita bool ou string)
+    # ───────────────────────────────────────────────────────────
+    from_me = _is_truthy_flag(key.get("fromMe"))
     if from_me:
+        log(f"[IGNORADO] mensagem própria (fromMe=true) id={message_id[:12]} jid={remote_jid}", "INFO")
         return jsonify({"ok": True, "ignored": True, "reason": "fromMe"})
+
+    # ───────────────────────────────────────────────────────────
+    # CAMADA 2 — remetente é o próprio número Scout
+    # (cobre bug onde Evolution não seta fromMe corretamente)
+    # ───────────────────────────────────────────────────────────
+    scout_num = "".join(c for c in (env("WHATSAPP_SCOUT", "") or "") if c.isdigit())
+    remote_digits = _extrai_numero(remote_jid)
+    participant_digits = _extrai_numero(participant)
+    if scout_num and (remote_digits == scout_num or participant_digits == scout_num):
+        log(f"[IGNORADO] mensagem própria (número Scout) id={message_id[:12]} "
+            f"remote={remote_digits} participant={participant_digits}", "INFO")
+        return jsonify({"ok": True, "ignored": True, "reason": "own_number"})
+
     if is_group:
         return jsonify({"ok": True, "ignored": True, "reason": "group"})
 
@@ -129,6 +184,15 @@ def webhook_whatsapp():
         return jsonify({"ok": True, "ignored": True, "reason": "sem_texto"})
     if not numero:
         return jsonify({"ok": True, "ignored": True, "reason": "sem_numero"})
+
+    # ───────────────────────────────────────────────────────────
+    # CAMADA 3 — eco de texto: se o texto recebido bate com alguma
+    # das últimas respostas que enviamos pra esse número, é loopback.
+    # ───────────────────────────────────────────────────────────
+    if _is_eco_da_nossa_resposta(numero, texto):
+        log(f"[IGNORADO] mensagem própria (eco de resposta) "
+            f"id={message_id[:12]} numero={numero}: {texto[:60]!r}", "INFO")
+        return jsonify({"ok": True, "ignored": True, "reason": "echo_resposta"})
 
     log(f"webhook ← {numero} ({push_name}) [{message_id[:10]}]: {texto[:80]!r}")
     # Despacha pro responder em thread separada
