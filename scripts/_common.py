@@ -507,6 +507,75 @@ def save_conversa(numero, conversa):
 
 
 # ═══════════════════════════════════════════════════════════
+# CACHE IDEMPOTENTE — dedup de message_id (Evolution às vezes
+# entrega o mesmo MESSAGES_UPSERT 2x; aqui bloqueamos repetição)
+# ═══════════════════════════════════════════════════════════
+import threading as _threading
+import time as _time
+
+_DEDUP_LOCK = _threading.Lock()
+_DEDUP_MEM = {}  # {message_id: expires_at_epoch} — fallback se Redis estiver fora
+_DEDUP_TTL = 60  # segundos
+_REDIS_CLIENT = None
+_REDIS_TRIED = False
+
+
+def _get_redis():
+    """Lazy connect ao Redis. Retorna None se inacessível (fallback in-memory)."""
+    global _REDIS_CLIENT, _REDIS_TRIED
+    if _REDIS_TRIED:
+        return _REDIS_CLIENT
+    _REDIS_TRIED = True
+    url = env("REDIS_URL") or "redis://redis:6379/0"
+    try:
+        import redis as _redis_lib
+        client = _redis_lib.Redis.from_url(url, socket_connect_timeout=2,
+                                           socket_timeout=2, decode_responses=True)
+        client.ping()
+        _REDIS_CLIENT = client
+        log(f"Redis conectado: {url}")
+    except Exception as e:
+        log(f"Redis indisponível ({e}) — usando dedup in-memory", "WARN")
+        _REDIS_CLIENT = None
+    return _REDIS_CLIENT
+
+
+def mensagem_ja_processada(message_id):
+    """Marca message_id como visto. Retorna True se JÁ estava no cache
+    (duplicado — caller deve ignorar). False se é a primeira vez (caller processa).
+
+    Atomicidade garantida via Redis SETNX (cross-process). Em fallback in-memory,
+    usa lock local — single-process apenas.
+    """
+    if not message_id:
+        return False  # sem ID, processa (não tem como deduplicar)
+
+    redis_cli = _get_redis()
+    if redis_cli is not None:
+        try:
+            key = f"processed:{message_id}"
+            # SET com NX=True (só seta se não existe) + EX=TTL — atomic
+            ok = redis_cli.set(key, "1", nx=True, ex=_DEDUP_TTL)
+            return not ok  # ok=True => primeira vez (não duplicada); ok=None/False => já existia
+        except Exception as e:
+            log(f"Redis dedup falhou ({e}), caindo pra in-memory", "WARN")
+            # cai pro fallback
+
+    # Fallback in-memory (single-process)
+    now = _time.time()
+    with _DEDUP_LOCK:
+        # GC de entradas expiradas (mantém map pequeno)
+        if len(_DEDUP_MEM) > 1000:
+            _DEDUP_MEM_NEW = {k: v for k, v in _DEDUP_MEM.items() if v > now}
+            _DEDUP_MEM.clear()
+            _DEDUP_MEM.update(_DEDUP_MEM_NEW)
+        if message_id in _DEDUP_MEM and _DEDUP_MEM[message_id] > now:
+            return True  # duplicada
+        _DEDUP_MEM[message_id] = now + _DEDUP_TTL
+        return False  # primeira vez
+
+
+# ═══════════════════════════════════════════════════════════
 # ESCALONAMENTO DE VOLUME (aquecimento do número)
 # ═══════════════════════════════════════════════════════════
 # Semana 1 (dias 1-7):   25/dia — aquecimento

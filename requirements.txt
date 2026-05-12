@@ -3,3 +3,4 @@ anthropic>=0.40
 requests>=2.32
 googlemaps>=4.10
 reportlab>=4.0
+redis>=5.0

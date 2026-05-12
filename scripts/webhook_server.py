@@ -19,7 +19,7 @@ import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _common import dispatch_dry_run, env, load_env, log
+from _common import dispatch_dry_run, env, load_env, log, mensagem_ja_processada
 
 load_env()
 
@@ -105,11 +105,19 @@ def webhook_whatsapp():
     remote_jid = key.get("remoteJid") or ""
     from_me = bool(key.get("fromMe"))
     is_group = "@g.us" in remote_jid
+    message_id = key.get("id") or ""
 
     if from_me:
         return jsonify({"ok": True, "ignored": True, "reason": "fromMe"})
     if is_group:
         return jsonify({"ok": True, "ignored": True, "reason": "group"})
+
+    # ★ DEDUP IDEMPOTENTE: Evolution às vezes entrega o mesmo evento 2x.
+    # Cache 60s via Redis (SETNX atomic) ou in-memory fallback.
+    # Tem que rodar ANTES do thread spawn — senão 2 threads sobem com mesmo id.
+    if message_id and mensagem_ja_processada(message_id):
+        log(f"webhook ← {remote_jid} dup ({message_id}) — silenciando", "INFO")
+        return jsonify({"ok": True, "ignored": True, "reason": "duplicate", "message_id": message_id})
 
     numero = _extrai_numero(remote_jid)
     msg = data.get("message") or {}
@@ -122,12 +130,13 @@ def webhook_whatsapp():
     if not numero:
         return jsonify({"ok": True, "ignored": True, "reason": "sem_numero"})
 
-    log(f"webhook ← {numero} ({push_name}): {texto[:80]!r}")
+    log(f"webhook ← {numero} ({push_name}) [{message_id[:10]}]: {texto[:80]!r}")
     # Despacha pro responder em thread separada
     threading.Thread(target=processar_async,
                      args=(numero, texto, push_name),
                      daemon=True).start()
-    return jsonify({"ok": True, "accepted": True, "numero": numero})
+    return jsonify({"ok": True, "accepted": True, "numero": numero,
+                    "message_id": message_id})
 
 
 if __name__ == "__main__":
