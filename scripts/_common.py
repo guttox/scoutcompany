@@ -614,6 +614,52 @@ def marcar_primeiro_disparo_se_preciso():
 
 
 # ═══════════════════════════════════════════════════════════
+# DDDs BR válidos (Anatel) — usado pra filtrar telefones plausíveis
+# ═══════════════════════════════════════════════════════════
+DDDS_BR_VALIDOS = frozenset({
+    # Sudeste
+    11, 12, 13, 14, 15, 16, 17, 18, 19,         # SP
+    21, 22, 24,                                  # RJ
+    27, 28,                                      # ES
+    31, 32, 33, 34, 35, 37, 38,                  # MG
+    # Sul
+    41, 42, 43, 44, 45, 46,                      # PR
+    47, 48, 49,                                  # SC
+    51, 53, 54, 55,                              # RS
+    # Centro-Oeste
+    61,                                          # DF
+    62, 64,                                      # GO
+    63,                                          # TO
+    65, 66,                                      # MT
+    67,                                          # MS
+    # Nordeste
+    68, 69,                                      # AC/RO
+    71, 73, 74, 75, 77,                          # BA
+    79,                                          # SE
+    81, 87,                                      # PE
+    82,                                          # AL
+    83,                                          # PB
+    84,                                          # RN
+    85, 88,                                      # CE
+    86, 89,                                      # PI
+    98, 99,                                      # MA
+    # Norte
+    91, 93, 94,                                  # PA
+    92, 97,                                      # AM
+    96,                                          # AP
+    95,                                          # RR
+})
+
+
+def ddd_br_valido(ddd):
+    """True se DDD está na lista oficial Anatel."""
+    try:
+        return int(ddd) in DDDS_BR_VALIDOS
+    except (TypeError, ValueError):
+        return False
+
+
+# ═══════════════════════════════════════════════════════════
 # RODÍZIO DE CIDADES (busca em São Paulo expandido)
 # ═══════════════════════════════════════════════════════════
 CIDADES_RODIZIO_DEFAULT = [

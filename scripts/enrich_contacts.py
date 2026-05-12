@@ -65,20 +65,27 @@ def normalize_phone_br(phone):
     """
     Recebe '+55 11 94067-0464' e retorna ('5511940670464', tipo).
     tipo ∈ {'mobile', 'landline', 'invalid'}.
-    Regras:
-      - 11 dígitos com DDD + 9-prefix = mobile
-      - 10 dígitos com DDD = landline
-      - outro formato = invalid
+
+    Regras pra mobile (heurística de ~95% serem WhatsApp):
+      - 11 dígitos no formato DDD(2) + 9 + 8-dígitos
+      - DDD precisa estar na lista oficial Anatel (ex: rejeita 23, 25, 30, 90)
+      - Primeiro dígito do número (após DDD) precisa ser 9
     """
+    from _common import ddd_br_valido
     if not phone:
         return None, "invalid"
     digits = re.sub(r"\D", "", phone)
-    # Remove código do país 55 se presente
     if digits.startswith("55") and len(digits) > 11:
         digits = digits[2:]
     if len(digits) == 11 and digits[2] == "9":
+        ddd = digits[:2]
+        if not ddd_br_valido(ddd):
+            return None, "invalid"
         return "55" + digits, "mobile"
     if len(digits) == 10:
+        ddd = digits[:2]
+        if not ddd_br_valido(ddd):
+            return None, "invalid"
         return "55" + digits, "landline"
     return None, "invalid"
 
