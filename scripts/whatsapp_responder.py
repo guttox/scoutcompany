@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import (
-    PIPELINE_CSV, PIPELINE_FIELDS, add_numero_to_blacklist, env,
+    LOG_DIR, PIPELINE_CSV, PIPELINE_FIELDS, add_numero_to_blacklist, env,
     is_numero_blacklisted, load_conversa, load_env, log, read_csv,
     save_conversa, send_whatsapp_via_evolution, write_csv,
 )
@@ -163,7 +163,37 @@ REGRAS DE RESPOSTA:
 - Profissional mas acessível. Direto ao ponto, explicativo quando precisar.
 - Use no máximo 1 emoji por resposta.
 - Identifique o serviço certo pela conversa. NÃO ofereça os 3 ao mesmo tempo.
-- Termina com uma pergunta simples quando faz sentido.
+
+CONDUÇÃO DA CONVERSA. Use a estrutura SPIN, em ordem:
+
+1. SITUAÇÃO. Entenda o cenário atual.
+   Ex.: "Você já tem site hoje?" / "Como você atrai clientes hoje?"
+
+2. PROBLEMA. Identifique a dor.
+   Ex.: "O que mais te incomoda no processo atual?" / "Você perde clientes por não aparecer no Google?"
+
+3. IMPLICAÇÃO. Amplifique a dor.
+   Ex.: "Imagina quanto cliente passa na frente do seu concorrente que aparece no Google e nem te acha..."
+
+4. NECESSIDADE. Crie desejo pela solução.
+   Ex.: "Se você tivesse um site que aparecesse no Google, como isso mudaria o seu negócio?"
+
+REGRAS DE AVANÇO:
+- Toda mensagem do Leo termina com UMA pergunta ou UM convite claro. Nunca deixe a conversa sem direção.
+- UMA pergunta por mensagem. Nunca duas ou mais juntas.
+- Se o cliente responder curto (sim, não, ok), aprofunde com uma pergunta de Implicação.
+- Máximo 3 perguntas antes de apresentar a solução.
+- Quando o cliente engajar bem com a dor e a necessidade, apresente o serviço com confiança e convide:
+  "Posso te mostrar como funcionaria pro seu negócio numa conversa de 10 minutos?"
+- Se o cliente sumir, não pressione. Leo só responde quando o cliente escreve de novo.
+
+GATILHO DE LEAD QUENTE. Quando o cliente disser "topo", "fechado", "vou querer", "manda proposta", "quero fazer" ou equivalente, o sistema dispara alerta no Telegram automaticamente. A resposta do Leo nessa hora é a frase do bloco INTERESSE REAL EM CONTRATAR e ele PARA.
+
+PROIBIDO NA CONDUÇÃO:
+- Mais de 1 pergunta por mensagem.
+- Apresentar os 3 serviços juntos (foque em UM, o que faz sentido pra dor identificada).
+- Falar de preço (a regra geral vale aqui também).
+- Mensagem sem direção: sempre termine com pergunta ou convite claro.
 
 QUANDO O CLIENTE PERGUNTAR SOBRE UM SERVIÇO:
 - Explica claro e simples, sem jargão.
@@ -201,17 +231,29 @@ NUNCA repita exatamente a mesma resposta. Adapte o tom à conversa."""
 # ═══════════════════════════════════════════════════════════
 # Anthropic API
 # ═══════════════════════════════════════════════════════════
+def _registrar_falha_resposta(detalhe):
+    """Acrescenta linha em logs/falhas_resposta.log para auto-monitoramento."""
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(LOG_DIR / "falhas_resposta.log", "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now().isoformat(timespec='seconds')}] {detalhe}\n")
+    except Exception as e:
+        log(f"não consegui gravar falhas_resposta.log: {e}", "ERROR")
+
+
 def _gerar_resposta_claude(historico, mensagem_recebida):
-    """Chama Claude e devolve só o texto. Em caso de erro, fallback genérico."""
+    """Chama Claude com timeout de 30s + 1 retry. Em caso de falha total, devolve fallback específico."""
     try:
         import anthropic
     except ImportError:
         log("anthropic SDK ausente — use ./venv/bin/python", "ERROR")
+        _registrar_falha_resposta("anthropic SDK ausente")
         return "Olá! Aqui é o Leo, da Scout. Recebi sua mensagem e respondo em instantes 😊"
 
     apikey = env("ANTHROPIC_API_KEY")
     if not apikey:
         log("ANTHROPIC_API_KEY ausente — fallback genérico", "ERROR")
+        _registrar_falha_resposta("ANTHROPIC_API_KEY ausente")
         return "Olá! Aqui é o Leo, da Scout. Recebi sua mensagem e respondo em instantes 😊"
 
     # Monta histórico no formato Anthropic
@@ -221,22 +263,29 @@ def _gerar_resposta_claude(historico, mensagem_recebida):
         msgs.append({"role": role, "content": h["content"]})
     msgs.append({"role": "user", "content": mensagem_recebida})
 
-    try:
-        client = anthropic.Anthropic(api_key=apikey)
-        resp = client.messages.create(
-            model=env("ANTHROPIC_MODEL", ANTHROPIC_MODEL),
-            max_tokens=ANTHROPIC_MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            messages=msgs,
-        )
-        # resp.content é uma lista de blocks; pega texto
-        for block in resp.content:
-            if getattr(block, "type", None) == "text":
-                return block.text.strip()
-        return ""
-    except Exception as e:
-        log(f"Claude falhou: {e}", "ERROR")
-        return "Tive um probleminha técnico aqui, te chamo de volta em instantes. Pode aguardar? 😊"
+    client = anthropic.Anthropic(api_key=apikey, timeout=30.0)
+    last_err = None
+    for attempt in (1, 2):
+        try:
+            resp = client.messages.create(
+                model=env("ANTHROPIC_MODEL", ANTHROPIC_MODEL),
+                max_tokens=ANTHROPIC_MAX_TOKENS,
+                system=SYSTEM_PROMPT,
+                messages=msgs,
+            )
+            for block in resp.content:
+                if getattr(block, "type", None) == "text":
+                    return block.text.strip()
+            return ""
+        except Exception as e:
+            last_err = e
+            log(f"Claude tentativa {attempt}/2 falhou: {e}", "ERROR")
+            _registrar_falha_resposta(f"tentativa {attempt}/2: {type(e).__name__}: {e}")
+            if attempt < 2:
+                time.sleep(1.5)
+
+    _registrar_falha_resposta(f"esgotou retries — último erro: {last_err}")
+    return "Oi! Tive um problema técnico aqui. Pode repetir sua última mensagem? 😊"
 
 
 # ═══════════════════════════════════════════════════════════
