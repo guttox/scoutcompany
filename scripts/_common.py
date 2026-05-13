@@ -354,47 +354,99 @@ def definir_servico_recomendado(prospect):
 # ═══════════════════════════════════════════════════════════
 # JANELAS DE ENVIO POR SEGMENTO
 # ═══════════════════════════════════════════════════════════
-# Cada segmento tem 1 ou 2 janelas (hora_inicio, hora_fim) em formato 24h
-# Fim de semana: sáb até 14h só, dom nunca
+# Cada segmento tem 1 ou 2 janelas (hora_inicio, hora_fim) em formato 24h.
+# Match no nome é por substring lowercase (ver _windows_para_segmento).
+# Hard limits abaixo (HORA_MIN_GLOBAL / HORA_MAX_GLOBAL / SAB_HORA_MAX)
+# clipam qualquer janela que extrapole — segurança em profundidade.
 SEGMENT_WINDOWS = {
-    "restaurante":  [(10, 11), (15, 16)],
-    "delivery":     [(10, 11), (15, 16)],
-    "pizzaria":     [(10, 11), (15, 16)],
-    "lanchonete":   [(10, 11), (15, 16)],
-    "padaria":      [(10, 11), (15, 16)],
-    "salao":        [(9, 10), (19, 20)],
-    "barbearia":    [(9, 10), (19, 20)],
-    "estetica":     [(9, 10), (19, 20)],
-    "clinica":      [(8, 9)],
-    "dentista":     [(8, 9)],
-    "odonto":       [(8, 9)],
-    "saude":        [(8, 9)],
-    "petshop":      [(10, 11)],
-    "pet":          [(10, 11)],
-    "veterinario":  [(10, 11)],
-    "loja":         [(9, 10)],
-    "comercio":     [(9, 10)],
-    "default":      [(9, 10)],
+    # Comida (rush antes do almoço + antes do jantar)
+    "restaurante":   [(10, 11), (15, 16)],
+    "delivery":      [(10, 11), (15, 16)],
+    "pizzaria":      [(10, 11), (15, 16)],
+    "lanchonete":    [(10, 11), (15, 16)],
+    "hamburgueria":  [(10, 11), (15, 16)],
+    "padaria":       [(10, 11), (15, 16)],
+    "confeitaria":   [(10, 11), (15, 16)],
+    "doceria":       [(10, 11), (15, 16)],
+    "buffet":        [(10, 11), (15, 16)],
+
+    # Beleza (antes de abrir + final do dia)
+    "salao":         [(9, 10), (18, 19)],
+    "barbearia":     [(9, 10), (18, 19)],
+    "estetica":      [(9, 10), (18, 19)],
+    "beleza":        [(9, 10), (18, 19)],
+
+    # Saúde (início do expediente + após almoço). Inclui veterinário.
+    "clinica":       [(8, 9), (13, 14)],
+    "consultorio":   [(8, 9), (13, 14)],
+    "dentista":      [(8, 9), (13, 14)],
+    "odonto":        [(8, 9), (13, 14)],
+    "saude":         [(8, 9), (13, 14)],
+    "hospital":      [(8, 9), (13, 14)],
+    "veterinari":    [(8, 9), (13, 14)],  # "veterinario" e "veterinária"
+
+    # Pet (varejo). NOTA: "petshop" casa antes de "pet" — match em ordem de inserção.
+    "petshop":       [(10, 11), (14, 15)],
+    "pet":           [(10, 11), (14, 15)],
+
+    # Varejo geral
+    "loja":          [(9, 10), (14, 15)],
+    "comercio":      [(9, 10), (14, 15)],
+    "otica":         [(9, 10), (14, 15)],
+    "óptica":        [(9, 10), (14, 15)],
+
+    # B2B / escritórios
+    "escritorio":    [(9, 10), (14, 15)],
+    "advocacia":     [(9, 10), (14, 15)],
+    "advogad":       [(9, 10), (14, 15)],
+    "contabilidade": [(9, 10), (14, 15)],
+    "contador":      [(9, 10), (14, 15)],
+    "consultoria":   [(9, 10), (14, 15)],
+    "b2b":           [(9, 10), (14, 15)],
+    "engenharia":    [(9, 10), (14, 15)],
+    "arquitetura":   [(9, 10), (14, 15)],
+
+    # Esporte / fitness. Spec ideal: (7,8) e (17,18); clipado em 8h pelo hard-limit
+    # global, então uso 8-9. Tarde fica como spec, (17, 18).
+    "academia":      [(8, 9), (17, 18)],
+    "esporte":       [(8, 9), (17, 18)],
+    "fitness":       [(8, 9), (17, 18)],
+    "crossfit":      [(8, 9), (17, 18)],
+    "pilates":       [(8, 9), (17, 18)],
+
+    # Padrão (segmento não identificado)
+    "default":       [(9, 10)],
 }
 
-# Hard limits que NUNCA são violadas
+# Hard limits que NUNCA são violadas (clip + skip em next_send_window)
 HORA_MIN_GLOBAL = 8
-HORA_MAX_GLOBAL = 20
-SAB_HORA_MAX = 14  # sábado: só até 14h
+HORA_MAX_GLOBAL = 19   # nunca disparar depois das 19h
+SAB_HORA_MAX = 13      # sábado: só até 13h
 MAX_DISPAROS_DIA_DEFAULT = 25
 INTERVALO_MIN_SEG = 180  # 3 min
 INTERVALO_MAX_SEG = 300  # 5 min
 
 
+def _strip_accents(s):
+    """Remove acentos pra match robusto: 'Estética' → 'estetica'."""
+    import unicodedata
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", s)
+        if not unicodedata.combining(c)
+    )
+
+
 def _windows_para_segmento(segmento):
-    """Match segmento → janelas. Substring lowercase."""
+    """Match segmento → janelas. Substring lowercase + sem acento.
+    Match na ORDEM de inserção do dict (Python 3.7+) — coloque chaves
+    mais específicas antes das genéricas (ex: 'petshop' antes de 'pet')."""
     if not segmento:
         return SEGMENT_WINDOWS["default"]
-    s = str(segmento).lower()
+    s = _strip_accents(str(segmento).lower())
     for key, windows in SEGMENT_WINDOWS.items():
         if key == "default":
             continue
-        if key in s:
+        if _strip_accents(key) in s:
             return windows
     return SEGMENT_WINDOWS["default"]
 

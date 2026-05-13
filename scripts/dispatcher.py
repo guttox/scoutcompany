@@ -170,6 +170,8 @@ def main():
 
     tentativas_rodada = 0
     limite_rodada = args.max if args.max else max_dia - tentativas_hoje
+    tentados_hoje = set()  # dedup local da rodada (evita retry de item duplicado na fila)
+
     # Ordena pelos mais antigos primeiro (FIFO)
     elegiveis.sort(key=lambda x: x.get("agendado_para", ""))
 
@@ -180,11 +182,23 @@ def main():
             log(f"Bateu limite diário durante rodada: {max_dia}", "WARN")
             break
 
+        # Guarda de horário durante a rodada: se cruzou a borda (ex: passou das
+        # 19h enquanto dormíamos no intervalo), para a rodada — itens sobrantes
+        # ficam pra próxima.
+        if not args.force and not is_horario_habil():
+            log("Cruzou borda de horário hábil — encerrando rodada", "INFO")
+            break
+
         numero = item.get("whatsapp", "")
         texto = item.get("mensagem", "")
         nome = item.get("nome", item.get("id"))
         if not numero or not texto:
             item["status"] = "invalido"
+            continue
+        if numero in tentados_hoje:
+            # dois itens na fila com mesmo número — dispara só o primeiro
+            item["status"] = "skip_duplicado"
+            item["skipado_em"] = datetime.now().isoformat(timespec="seconds")
             continue
 
         # Registra primeiro disparo (se ainda não há) — marca semana 1 dia 1
@@ -207,7 +221,6 @@ def main():
             atualizar_pipeline_falha(item.get("id"), resp.get("status", "?"))
             log(f"✗ FALHA {nome} ({numero}): {resp.get('status')} — segue pro próximo", "ERROR")
 
-        # Marca o número como já tentado hoje (impede retry mesmo se item duplicado existir na fila)
         tentados_hoje.add(numero)
 
         # Intervalo aleatório só em LIVE (vale pra sucesso E falha)

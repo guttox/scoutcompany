@@ -7,9 +7,10 @@
 # TZ é setado por linha (CRON_TZ funciona em cron moderno do Linux).
 CRON_TZ=America/Sao_Paulo
 
-# Dispatcher — processa fila de WhatsApp a cada 10 min (08-20h, seg-sex; sáb até 14h)
-*/10 8-19 * * 1-5   docker compose -f /opt/scout/docker-compose.yml exec -T scout python scripts/dispatcher.py >> /opt/scout/logs/cron-dispatcher.log 2>&1
-*/10 8-13 * * 6     docker compose -f /opt/scout/docker-compose.yml exec -T scout python scripts/dispatcher.py >> /opt/scout/logs/cron-dispatcher.log 2>&1
+# Dispatcher — processa fila de WhatsApp a cada 10 min
+# Seg-sex 8h-18h59 (HORA_MAX_GLOBAL=19, exclusivo). Sáb 8h-12h59 (SAB_HORA_MAX=13). Dom nunca.
+*/10 8-18 * * 1-5   docker compose -f /opt/scout/docker-compose.yml exec -T scout python scripts/dispatcher.py >> /opt/scout/logs/cron-dispatcher.log 2>&1
+*/10 8-12 * * 6     docker compose -f /opt/scout/docker-compose.yml exec -T scout python scripts/dispatcher.py >> /opt/scout/logs/cron-dispatcher.log 2>&1
 
 # Daily — pipeline diário de prospecção (seg-sex 9h)
 3 9 * * 1-5         docker compose -f /opt/scout/docker-compose.yml exec -T scout python scripts/run_all.py >> /opt/scout/logs/cron-daily.log 2>&1
