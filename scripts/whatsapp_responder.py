@@ -10,7 +10,7 @@ Comportamento:
   - Tom: simpático, direto, profissional. Português BR.
   - Nunca revela preço — sempre redireciona.
   - Se detectar palavra-chave de intenção → ALERTA Telegram + para de responder.
-  - Anti-spam: mesma pessoa não recebe mais de 1 resposta por minuto.
+  - Anti-spam: mesma pessoa não recebe mais de 1 resposta a cada 15s.
   - Delay 5-15s antes de cada resposta (parece humano).
   - Histórico até 10 mensagens em ~/scout/conversas/[numero].json.
 
@@ -41,7 +41,7 @@ from _common import (
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
 ANTHROPIC_MAX_TOKENS = 350
 
-ANTI_SPAM_SEGUNDOS = 60          # mesma pessoa não responde +1x por minuto
+ANTI_SPAM_SEGUNDOS = 15          # mesma pessoa não responde +1x a cada 15s
 DELAY_MIN_SEG = 5                # delay humano antes de responder
 DELAY_MAX_SEG = 15
 HISTORICO_LIMITE_CTX = 10        # quantas msgs anteriores mandar pro Claude
@@ -444,7 +444,7 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
                 "blacklisted": True,
                 "resposta": resposta_rej}
 
-    # 3. Anti-spam: respondi essa pessoa há menos de 60s?
+    # 3. Anti-spam: respondi essa pessoa há menos de 15s?
     ultimas = [m for m in conversa.get("mensagens", []) if m.get("role") == "assistant"]
     if ultimas:
         try:
