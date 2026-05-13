@@ -14,6 +14,9 @@ CRON_TZ=America/Sao_Paulo
 # Daily — pipeline diário de prospecção (seg-sex 9h)
 3 9 * * 1-5         docker compose -f /opt/scout/docker-compose.yml exec -T scout python scripts/run_all.py >> /opt/scout/logs/cron-daily.log 2>&1
 
+# Follow-up automático 48h — seg-sex 10h
+0 10 * * 1-5        docker compose -f /opt/scout/docker-compose.yml exec -T scout python scripts/followup.py >> /opt/scout/logs/cron-followup.log 2>&1
+
 # Weekly — relatório PDF + analyze (dom 20h)
 0 20 * * 0          docker compose -f /opt/scout/docker-compose.yml exec -T scout bash scripts/weekly_pipeline.sh >> /opt/scout/logs/cron-weekly.log 2>&1
 

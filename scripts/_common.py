@@ -48,6 +48,9 @@ PIPELINE_FIELDS = [
     # Tracking do site scoutcompany.com.br
     "data_envio_site",   # quando o link foi enviado pro prospect (ISO 8601)
     "site_acessado",     # "sim" / "nao" / "" — atualização manual por enquanto
+    # Follow-up automático 48h
+    "data_followup",     # ISO 8601 — quando o follow-up foi disparado (ou "")
+    "status_followup",   # "" | "Enviado" | "Falhou" | "Skipped"
 ]
 
 
@@ -158,6 +161,79 @@ def reload_blocklist():
 
 
 import re as _re
+
+
+# ─────────────────────────────────────────────
+# Blacklist de NÚMEROS (rejeição/opt-out individual)
+# Arquivo append-only: data/blacklist_numeros.txt
+# Match: dígitos do número, qualquer formato de entrada.
+# ─────────────────────────────────────────────
+BLACKLIST_NUMEROS_PATH = DATA_DIR / "blacklist_numeros.txt"
+
+
+def _numero_digits(numero):
+    """Extrai só os dígitos do número (remove +55, espaços, traços, parênteses)."""
+    return "".join(c for c in str(numero or "") if c.isdigit())
+
+
+def _load_blacklist_numeros():
+    """Lê blacklist_numeros.txt e retorna set de strings (só dígitos).
+    Não cacheia — relê todo chamada porque o arquivo é append-only e baixa volumetria."""
+    if not BLACKLIST_NUMEROS_PATH.exists():
+        return set()
+    out = set()
+    for raw in BLACKLIST_NUMEROS_PATH.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # cada linha pode ser "5511999999999 # motivo" ou só o número
+        token = line.split("#", 1)[0].strip()
+        digits = _numero_digits(token)
+        if digits:
+            out.add(digits)
+    return out
+
+
+def is_numero_blacklisted(numero):
+    """True se o número está na blacklist (case-insensitive de formato).
+    Faz match nos últimos 11 dígitos (DDD+celular) pra tolerar +55 ausente/presente."""
+    n = _numero_digits(numero)
+    if not n:
+        return False
+    bl = _load_blacklist_numeros()
+    if n in bl:
+        return True
+    # tolera diferença entre 55XXXXXXXXXXX (13 dígitos) e XXXXXXXXXXX (11 dígitos)
+    if len(n) >= 11:
+        tail = n[-11:]
+        for b in bl:
+            if b.endswith(tail) or tail.endswith(b[-11:] if len(b) >= 11 else b):
+                return True
+    return False
+
+
+def add_numero_to_blacklist(numero, motivo=""):
+    """Adiciona o número (só dígitos) na blacklist. Idempotente."""
+    n = _numero_digits(numero)
+    if not n:
+        return False
+    if is_numero_blacklisted(n):
+        return False
+    BLACKLIST_NUMEROS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not BLACKLIST_NUMEROS_PATH.exists():
+        BLACKLIST_NUMEROS_PATH.write_text(
+            "# Scout — blacklist de números individuais (rejeição/opt-out)\n"
+            "# Um número por linha, só dígitos (DDI+DDD+telefone). Comentário com #.\n"
+            "# Adicionado automaticamente pelo whatsapp_responder quando o prospect rejeita contato.\n"
+            "# NUNCA mais contatar esses números — nem follow-up, nem novo disparo.\n\n",
+            encoding="utf-8",
+        )
+    stamp = datetime.now().isoformat(timespec="seconds")
+    suffix = f"  # {motivo} @ {stamp}" if motivo else f"  # @ {stamp}"
+    with open(BLACKLIST_NUMEROS_PATH, "a", encoding="utf-8") as f:
+        f.write(f"{n}{suffix}\n")
+    return True
+
 
 def is_blocked_brand(nome):
     """True se o nome do prospect contém uma marca da blocklist como PALAVRA INTEIRA

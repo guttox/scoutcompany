@@ -30,8 +30,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import (
-    PIPELINE_CSV, PIPELINE_FIELDS, env, load_env, load_conversa, log,
-    read_csv, save_conversa, send_whatsapp_via_evolution, write_csv,
+    PIPELINE_CSV, PIPELINE_FIELDS, add_numero_to_blacklist, env,
+    is_numero_blacklisted, load_conversa, load_env, log, read_csv,
+    save_conversa, send_whatsapp_via_evolution, write_csv,
 )
 
 # ═══════════════════════════════════════════════════════════
@@ -52,6 +53,76 @@ PALAVRAS_LEAD_QUENTE = [
     "me manda proposta", "manda proposta", "quero contratar",
     "bora fazer", "pode fazer", "vou querer",
 ]
+
+# ─── Rejeição AGRESSIVA (xingamento, ameaça, exaltação) ────────
+# Match por substring lowercase. Não inclui rejeições neutras
+# tipo "não quero" (essas caem em REJEICAO_EDUCADA).
+PALAVRAS_REJEICAO_AGRESSIVA = [
+    "vai se fud", "vai se foder", "vai tomar no", "vsf", "vtnc",
+    "porra", "caralho", "merda", "filho da puta", "fdp",
+    "encheu o saco", "saco cheio", "me deixa em paz",
+    "para de me encher", "pare de me encher", "para de encher",
+    "vai a merda", "vai à merda", "cala a boca",
+    "idiota", "imbecil", "otario", "otário",
+]
+
+# ─── Rejeição EDUCADA (opt-out claro, sem agressão) ────────────
+PALAVRAS_REJEICAO_EDUCADA = [
+    "não tenho interesse", "nao tenho interesse",
+    "sem interesse",
+    "não preciso", "nao preciso",
+    "não quero", "nao quero",
+    "para de me mandar", "pare de me mandar",
+    "para de mandar", "pare de mandar",
+    "me tira dessa lista", "me tire dessa lista",
+    "sair da lista", "remover da lista", "remove da lista",
+    "isso é spam", "isto é spam", "é spam",
+    "marcar como spam", "marcar spam",
+    "vou bloquear", "vou te bloquear",
+    "block", "blocked",
+]
+
+# Mensagens muito curtas que claramente significam parar.
+# Comparadas após strip de pontuação contra a mensagem inteira.
+PALAVRAS_REJEICAO_CURTAS = {
+    "para", "pare", "chega", "ja chega", "já chega", "stop",
+    "para com isso", "pare com isso", "parar", "para isso",
+    "sai", "some", "nao", "não",  # "não" sozinho como resposta direta
+}
+
+# ─── Dúvida / hesitação (não é rejeição, é nudge) ──────────────
+PALAVRAS_DUVIDA = [
+    "não sei", "nao sei",
+    "talvez", "quem sabe",
+    "vou pensar", "preciso pensar", "vou ver",
+    "está caro", "esta caro", "tá caro", "ta caro",
+    "muito caro", "ficou caro",
+    "não tenho dinheiro", "nao tenho dinheiro",
+    "sem grana", "sem orçamento", "sem orcamento",
+    "não dá agora", "nao da agora", "agora não", "agora nao",
+]
+
+# ─── Respostas padrão (texto do spec, não passa por Claude) ─────
+RESPOSTA_REJEICAO_EDUCADA = (
+    "Tudo bem, Leo da Scout entende!\n\n"
+    "Não vou mais te incomodar por aqui.\n\n"
+    "Se um dia precisar de site, sistema ou automação pode me chamar. "
+    "Estarei por aqui.\n\n"
+    "Boa sorte no negócio!"
+)
+
+RESPOSTA_REJEICAO_AGRESSIVA = (
+    "Entendido, desculpa o incômodo!\n\n"
+    "Não vou mais te contatar.\n\n"
+    "Qualquer dia que precisar, a Scout está à disposição."
+)
+
+RESPOSTA_DUVIDA = (
+    "Entendo completamente!\n\n"
+    "Não precisa decidir agora. Se quiser tirar alguma dúvida antes ou "
+    "entender melhor como funciona, pode me perguntar à vontade.\n\n"
+    "Estou aqui quando precisar!"
+)
 
 SYSTEM_PROMPT = """Você é o Leo, assistente da Scout Company. Responda sempre em português brasileiro.
 
@@ -172,6 +243,78 @@ def detectar_lead_quente(texto):
 
 
 # ═══════════════════════════════════════════════════════════
+# Detector REJEIÇÃO (educada vs agressiva)
+# ═══════════════════════════════════════════════════════════
+def _normaliza_curto(texto):
+    """Limpa pontuação de uma mensagem curta pra match exato em PALAVRAS_REJEICAO_CURTAS."""
+    if not texto:
+        return ""
+    t = texto.lower().strip()
+    for ch in "!?.,;:\"'\n\r":
+        t = t.replace(ch, " ")
+    return " ".join(t.split())
+
+
+def detectar_rejeicao(texto):
+    """Retorna (tipo, palavra) onde tipo é 'agressiva', 'educada' ou None."""
+    if not texto:
+        return (None, None)
+    t = texto.lower()
+
+    for kw in PALAVRAS_REJEICAO_AGRESSIVA:
+        if kw in t:
+            return ("agressiva", kw)
+
+    for kw in PALAVRAS_REJEICAO_EDUCADA:
+        if kw in t:
+            return ("educada", kw)
+
+    # Mensagens muito curtas tipo "para", "chega", "stop" — só viram rejeição
+    # se a mensagem inteira (após limpar pontuação) for a palavra.
+    curta = _normaliza_curto(texto)
+    if curta in PALAVRAS_REJEICAO_CURTAS:
+        return ("educada", curta)
+
+    return (None, None)
+
+
+# ═══════════════════════════════════════════════════════════
+# Detector DÚVIDA / hesitação
+# ═══════════════════════════════════════════════════════════
+def detectar_duvida(texto):
+    if not texto:
+        return None
+    t = texto.lower()
+    for kw in PALAVRAS_DUVIDA:
+        if kw in t:
+            return kw
+    return None
+
+
+def marcar_rejeitado_pipeline(numero):
+    """Marca status='Rejeitado' na linha do pipeline cujo contato bate com o número.
+    Retorna nome do prospect (ou None se não estava na pipeline)."""
+    pipeline = read_csv(PIPELINE_CSV)
+    if not pipeline:
+        return None
+    digits = "".join(c for c in str(numero) if c.isdigit())
+    nome_match = None
+    for row in pipeline:
+        contato = "".join(c for c in (row.get("contato") or "") if c.isdigit())
+        if contato and (contato in digits or digits in contato):
+            row["status"] = "Rejeitado"
+            row["observacao"] = (row.get("observacao") or "").strip()
+            if row["observacao"]:
+                row["observacao"] += " | "
+            row["observacao"] += f"rejeitado em {datetime.now().isoformat(timespec='seconds')}"
+            nome_match = row.get("nome", "")
+            break
+    if nome_match:
+        write_csv(PIPELINE_CSV, pipeline, PIPELINE_FIELDS)
+    return nome_match
+
+
+# ═══════════════════════════════════════════════════════════
 # Alerta Telegram
 # ═══════════════════════════════════════════════════════════
 def alertar_telegram_lead_quente(nome, numero, ultima_msg, intencao):
@@ -251,42 +394,73 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
         return {"sent": False, "reason": "vazio", "lead_quente": False}
 
     conversa = load_conversa(numero)
+    now_iso = datetime.now().isoformat(timespec="seconds")
+
+    def _append_user_msg():
+        conversa["mensagens"].append({
+            "role": "user", "content": texto_recebido, "ts": now_iso,
+        })
+
+    # 0. BLACKLIST / REJEITADO — silêncio total. Nunca mais responde.
+    if is_numero_blacklisted(numero) or conversa.get("rejeitado"):
+        log(f"[{numero}] blacklisted/rejeitado — silenciando", "INFO")
+        _append_user_msg()
+        save_conversa(numero, conversa)
+        return {"sent": False, "reason": "blacklisted", "lead_quente": False}
 
     # 1. Se já marcado como lead quente, não responde mais — humano assume
     if conversa.get("lead_quente"):
         log(f"[{numero}] lead quente — silenciando", "INFO")
-        # ainda salva a msg recebida no histórico
-        conversa["mensagens"].append({
-            "role": "user", "content": texto_recebido,
-            "ts": datetime.now().isoformat(timespec="seconds"),
-        })
+        _append_user_msg()
         save_conversa(numero, conversa)
         return {"sent": False, "reason": "lead_quente_silencio", "lead_quente": True}
 
-    # 2. Anti-spam: respondi essa pessoa há menos de 60s?
+    # 2. REJEIÇÃO — detectada ANTES de anti-spam (sempre honra o pedido de parada)
+    tipo_rej, palavra_rej = detectar_rejeicao(texto_recebido)
+    if tipo_rej:
+        _append_user_msg()
+        resposta_rej = (RESPOSTA_REJEICAO_AGRESSIVA if tipo_rej == "agressiva"
+                        else RESPOSTA_REJEICAO_EDUCADA)
+        send_resp = send_whatsapp_via_evolution(numero, resposta_rej)
+        if send_resp.get("ok"):
+            conversa["mensagens"].append({
+                "role": "assistant", "content": resposta_rej,
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "dry_run": send_resp.get("dry_run", False),
+            })
+        # Marca tudo e blacklist DEPOIS do envio (mesmo se falhou, ainda blacklista)
+        conversa["rejeitado"] = True
+        conversa["rejeicao_tipo"] = tipo_rej
+        conversa["rejeicao_palavra"] = palavra_rej
+        conversa["rejeitado_em"] = datetime.now().isoformat(timespec="seconds")
+        save_conversa(numero, conversa)
+        nome_pipeline = marcar_rejeitado_pipeline(numero)
+        add_numero_to_blacklist(numero, motivo=f"rejeicao_{tipo_rej}:{palavra_rej}")
+        log(f"🚫 [{numero}] REJEIÇÃO {tipo_rej.upper()} ('{palavra_rej}') — "
+            f"prospect={nome_pipeline or '(novo)'} • blacklisted")
+        return {"sent": send_resp.get("ok", False),
+                "reason": f"rejeicao_{tipo_rej}",
+                "lead_quente": False,
+                "blacklisted": True,
+                "resposta": resposta_rej}
+
+    # 3. Anti-spam: respondi essa pessoa há menos de 60s?
     ultimas = [m for m in conversa.get("mensagens", []) if m.get("role") == "assistant"]
     if ultimas:
         try:
             ts_ultima = datetime.fromisoformat(ultimas[-1]["ts"])
             if (datetime.now() - ts_ultima).total_seconds() < ANTI_SPAM_SEGUNDOS:
                 log(f"[{numero}] anti-spam: respondi há <{ANTI_SPAM_SEGUNDOS}s, skip", "INFO")
-                # ainda grava a recebida
-                conversa["mensagens"].append({
-                    "role": "user", "content": texto_recebido,
-                    "ts": datetime.now().isoformat(timespec="seconds"),
-                })
+                _append_user_msg()
                 save_conversa(numero, conversa)
                 return {"sent": False, "reason": "anti_spam", "lead_quente": False}
         except Exception:
             pass
 
-    # 3. Adiciona a recebida ao histórico
-    conversa["mensagens"].append({
-        "role": "user", "content": texto_recebido,
-        "ts": datetime.now().isoformat(timespec="seconds"),
-    })
+    # 4. Adiciona a recebida ao histórico
+    _append_user_msg()
 
-    # 4. Detecta lead quente PRIMEIRO (não responde, só alerta)
+    # 5. Detecta lead quente PRIMEIRO (não responde, só alerta)
     intencao = detectar_lead_quente(texto_recebido)
     if intencao:
         nome = lookup_nome_pipeline(numero) or nome_pushname or "(novo contato)"
@@ -298,12 +472,29 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
         save_conversa(numero, conversa)
         return {"sent": False, "reason": "lead_quente_handoff", "lead_quente": True}
 
-    # 5. Delay humano 5-15s
+    # 6. DÚVIDA / hesitação — responde uma vez com texto de spec, sem chamar Claude.
+    #    Subsequentes msgs caem no fluxo normal (Claude decide).
+    duvida_kw = detectar_duvida(texto_recebido)
+    if duvida_kw and not conversa.get("duvida_handled"):
+        send_resp = send_whatsapp_via_evolution(numero, RESPOSTA_DUVIDA)
+        if send_resp.get("ok"):
+            conversa["mensagens"].append({
+                "role": "assistant", "content": RESPOSTA_DUVIDA,
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "dry_run": send_resp.get("dry_run", False),
+            })
+        conversa["duvida_handled"] = True
+        save_conversa(numero, conversa)
+        log(f"💭 [{numero}] dúvida detectada ('{duvida_kw}') — resposta padrão")
+        return {"sent": send_resp.get("ok", False), "reason": "duvida",
+                "lead_quente": False, "resposta": RESPOSTA_DUVIDA}
+
+    # 7. Delay humano 5-15s
     wait = random.randint(DELAY_MIN_SEG, DELAY_MAX_SEG)
     log(f"[{numero}] respondendo em {wait}s")
     time.sleep(wait)
 
-    # 6. Chama Claude
+    # 8. Chama Claude
     historico_pra_claude = conversa.get("mensagens", [])[:-1]  # sem a msg que acabou de chegar
     resposta = _gerar_resposta_claude(historico_pra_claude, texto_recebido)
     if not resposta:
@@ -311,7 +502,7 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
         save_conversa(numero, conversa)
         return {"sent": False, "reason": "claude_vazio", "lead_quente": False}
 
-    # 7. Envia via Evolution (respeita SCOUT_DRY_RUN)
+    # 9. Envia via Evolution (respeita SCOUT_DRY_RUN)
     send_resp = send_whatsapp_via_evolution(numero, resposta)
     if send_resp["ok"]:
         conversa["mensagens"].append({
@@ -337,7 +528,13 @@ if __name__ == "__main__":
 
     if args.detectar:
         kw = detectar_lead_quente(args.detectar)
-        print(json.dumps({"lead_quente": bool(kw), "intencao": kw}, ensure_ascii=False))
+        rej_tipo, rej_kw = detectar_rejeicao(args.detectar)
+        duv = detectar_duvida(args.detectar)
+        print(json.dumps({
+            "lead_quente": bool(kw), "intencao": kw,
+            "rejeicao_tipo": rej_tipo, "rejeicao_palavra": rej_kw,
+            "duvida": duv,
+        }, ensure_ascii=False))
         sys.exit(0)
 
     if args.test:
