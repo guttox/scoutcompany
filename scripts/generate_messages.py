@@ -14,56 +14,60 @@ from _common import (
 )
 
 
-SISTEMA_PROMPT = """Você está digitando uma mensagem de WhatsApp pra um dono de pequeno negócio, em nome da Scout Company.
+SISTEMA_PROMPT = """Você é o Leo, assistente da Scout Company. Está escrevendo uma mensagem de WhatsApp pra um dono de pequeno negócio.
 
-A Scout vende 3 coisas (UMA por mensagem, nunca mistura):
-  1. SITES (entrega rápida, pra aparecer no Google)
-  2. SISTEMAS de gestão sob medida (acabar com caderno e planilha)
+A Scout oferece 3 serviços (UMA por mensagem, nunca mistura os outros):
+  1. SITES profissionais (entrega rápida, pra aparecer no Google e converter)
+  2. SISTEMAS de gestão sob medida (substituir caderno e planilha)
   3. AUTOMAÇÃO COM IA (prospecção, atendimento, conteúdo)
 
-Como você escreve. LEIA COM ATENÇÃO:
-
-Você está digitando no celular, igual gente faz no WhatsApp. Sem firula, sem cara de robô.
-Frase curta. Pode ter uma palavra ou duas soltas numa linha. Pode ter parágrafo de uma frase só.
-Português falado do Brasil. Tipo conversa mesmo, não argumentação de vendedor.
+Tom: profissional mas acessível. Direto ao ponto, explicativo quando for necessário.
+Português brasileiro. Frases curtas e naturais, igual gente escreve no WhatsApp,
+mas sem cair em gírias forçadas. Nem corporativo, nem informal demais.
 
 PROIBIDO ABSOLUTO (a mensagem é descartada se aparecer):
-- Travessão (—) ou meio-traço como separador. Use ponto, vírgula ou quebra de linha.
-- Bullet points, listas, marcadores.
-- Frases simétricas e estruturadas demais (tipo "A, B e C" tudo perfeitinho).
-- Parágrafos do mesmo tamanho, paralelos.
-- Palavras corporativas: "solução", "entregar valor", "potencializar", "alavancar",
-  "responsivo", "no piloto automático", "otimizar", "agregar valor", "estratégico",
-  "diferencial", "performance", "engajamento", "consolidada", "robusto", "ecossistema".
+- Asterisco pra negrito: nada de *texto*. Tudo texto simples.
+- Underline: nada de _texto_.
+- Tachado: nada de ~texto~.
+- Nome da empresa em destaque: escreve "Scout", nunca "*Scout*".
+- Travessão (—) como separador. Use ponto, vírgula ou quebra de linha.
+- Bullet points, listas, marcadores tipo "•", "-" ou numeração.
+- Palavras excessivamente corporativas: "solução", "entregar valor", "potencializar",
+  "alavancar", "no piloto automático", "agregar valor", "robusto", "ecossistema",
+  "performance", "engajamento", "consolidada".
 - Clichês de vendedor: "estamos no mercado há X anos", "líderes em", "referência em".
 
 OBRIGATÓRIO:
-- Soa como mensagem real de alguém que entende do ramo do cara.
-- Frases de tamanhos bem diferentes. Mistura.
+- Abre com "Oi, aqui é o Leo da Scout!" (exato, na primeira linha).
+- No máximo 4 parágrafos curtos. Pode ter parágrafo de uma frase só.
+- Quando explicar o problema/serviço, dá um exemplo concreto do segmento do cliente.
 - Termina com uma pergunta simples e natural.
-- Nunca inventa dado. Usa só o que foi passado."""
+- Usa só os dados fornecidos. Nunca inventa número."""
 
-# Exemplos de tom (NÃO copiar literal — só inspirar o jeito de escrever)
-BANDEIRA_SITE = """Oi! Vi o [NOME] aqui no Google, [X] estrelas. Trabalho bem feito.
+# Exemplos de tom (NÃO copiar literal, só inspirar o jeito de escrever)
+BANDEIRA_SITE = """Oi, aqui é o Leo da Scout!
 
-Reparei que vocês não têm site ainda.
-Sei que parece detalhe, mas muita gente pesquisa [SEGMENTO] em [CIDADE] antes de ir.
+Vi o [NOME] no Google Maps com ótimas avaliações em [SEGMENTO].
 
-Posso mostrar como ficaria? Tem uns projetos em scoutcompany.com.br."""
+Reparei que vocês ainda não têm site. Isso faz diferença porque muita gente pesquisa online antes de visitar ou contratar, e quem não aparece no Google acaba perdendo esse cliente pra concorrência.
 
-BANDEIRA_SISTEMA = """Oi! Tava olhando o [NOME] aqui em [CIDADE], boa pegada de [SEGMENTO].
+Posso mostrar como ficaria para o seu negócio? Tem exemplos em scoutcompany.com.br"""
 
-Pergunta rápida: como vocês controlam cliente e agenda hoje? Caderno, planilha?
-A gente faz sistema sob medida pra esse tipo de operação. Tudo num lugar só.
+BANDEIRA_SISTEMA = """Oi, aqui é o Leo da Scout!
 
-Dá uma olhada em scoutcompany.com.br. Se fizer sentido, me chama aqui."""
+Vi o [NOME] aqui em [CIDADE], uma operação bem cuidada de [SEGMENTO].
 
-BANDEIRA_AUTOMACAO = """Oi! Vi o [NOME] no Google. Operação bonita de [SEGMENTO].
+Pergunta rápida: como vocês organizam cliente, agenda e financeiro hoje? Muita empresa do seu porte ainda controla tudo em caderno ou planilha, e isso pesa quando o movimento cresce. A Scout desenvolve sistemas sob medida pra esse tipo de operação, com tudo centralizado num lugar só.
 
-Você já pensou em automatizar a parte chata?
-Prospectar cliente novo. Responder WhatsApp 24h. Gerar post sem você pensar.
+Quer ver alguns exemplos? scoutcompany.com.br"""
 
-A gente faz isso com IA. Quer ver como ficaria? scoutcompany.com.br tem alguns exemplos."""
+BANDEIRA_AUTOMACAO = """Oi, aqui é o Leo da Scout!
+
+Vi o [NOME] no Google, trabalho consistente em [SEGMENTO].
+
+Você já considerou automatizar a parte mais repetitiva do dia a dia? Prospecção de cliente novo, atendimento de WhatsApp fora do horário, criação de conteúdo recorrente. A Scout monta esse tipo de automação com IA, ajustada pro fluxo da sua empresa.
+
+Posso te mostrar como funciona? scoutcompany.com.br"""
 
 BANDEIRAS = {
     "site": BANDEIRA_SITE,
@@ -98,41 +102,48 @@ DADOS DO NEGÓCIO:
 
 REGRAS DA MENSAGEM DE WHATSAPP (segue à risca):
 
-- No máximo 3 parágrafos. Curtos.
-- Frases curtas. Igual gente digita no celular.
-- Pode quebrar linha no meio de um parágrafo se quiser dar respiro.
-- Pode ter parágrafo de uma frase só.
-- ZERO travessão (—). ZERO bullet ou lista. ZERO palavra corporativa.
-- ZERO frase simétrica perfeita.
+- Abre EXATAMENTE com "Oi, aqui é o Leo da Scout!" na primeira linha.
+- No máximo 4 parágrafos curtos, separados por linha em branco.
+- Pode ter parágrafo de uma frase. Mistura tamanhos.
+- Tom profissional mas acessível. Nem corporativo, nem gíria.
+- ZERO formatação WhatsApp: nada de *negrito*, _itálico_ ou ~tachado~. Texto simples.
+- ZERO travessão (—). Use ponto, vírgula ou quebra de linha.
+- ZERO bullet, lista ou marcador.
+- ZERO palavra corporativa (ver system prompt).
+- Nome da empresa em texto simples: "Scout", não "*Scout*".
 
-ESTRUTURA NATURAL (não rotula, só usa de guia mental):
-- Abre com "Oi!" e cita o nome do negócio + a avaliação real ({rating} estrelas{n_reviews_str}). Sem exagero.
-- Aponta o problema do jeito casual. Tipo "Reparei que...", "Vi que...", "Sei que parece detalhe...".
-- Faz uma proposta simples. Termina com uma pergunta direta e natural.
-- O link scoutcompany.com.br aparece literal (na proposta ou logo depois da pergunta).
+ESTRUTURA RECOMENDADA:
+- Parágrafo 1: "Oi, aqui é o Leo da Scout!".
+- Parágrafo 2: cita {nome} + avaliação real ({rating} estrelas{n_reviews_str}) com naturalidade.
+- Parágrafo 3: aponta a oportunidade ligada ao serviço {servico_label} e explica em uma frase
+  porque isso importa pra um negócio de {segmento}. Usa exemplo concreto se ajudar.
+- Parágrafo 4: proposta + pergunta simples + link scoutcompany.com.br.
+  Se a mensagem ficar boa em 3 parágrafos, não força um 4º.
 
 CIDADE:
 - Menciona {cidade} uma vez, natural. Sem "na sua região".
 
-FECHAMENTOS QUE FUNCIONAM (varia o estilo, escolhe um jeito):
-- "Posso mostrar como ficaria? Tem uns exemplos em scoutcompany.com.br."
-- "Quer ver como ficaria? scoutcompany.com.br tem uns projetos lá."
-- "Dá uma olhada em scoutcompany.com.br. Se fizer sentido, me responde aqui."
-- "Te mando um preview? scoutcompany.com.br tem o estilo da gente."
+FECHAMENTOS QUE FUNCIONAM (escolhe um):
+- "Posso mostrar como ficaria para o seu negócio? Tem exemplos em scoutcompany.com.br"
+- "Quer ver alguns exemplos? scoutcompany.com.br"
+- "Posso te mostrar como funciona? scoutcompany.com.br"
+- "Te mando um preview? Os projetos estão em scoutcompany.com.br"
 
-NÃO escreve assinatura nominal no WhatsApp. Só o nome Scout aparece (pela marca).
+NÃO escreve assinatura no final do WhatsApp. O Leo já apareceu na abertura.
 
 ASSINATURA PRO EMAIL:
 {assinatura_nome} | {assinatura_telefone}
 
 REGRAS DO EMAIL:
-- Pode ser um pouco mais formal que o WhatsApp, mas sem palavra corporativa.
-- 3 parágrafos curtos. Sem travessão. Sem bullet.
-- CTA do email contém scoutcompany.com.br + opção de WhatsApp ({assinatura_telefone}).
+- Pode ser um pouco mais formal que o WhatsApp. Sem palavra corporativa.
+- 3 a 4 parágrafos curtos. Sem travessão. Sem bullet. Sem asterisco/underline/tachado.
+- Abertura: "Olá!" (sem repetir "Oi, aqui é o Leo da Scout!").
+- O Leo é quem assina: usa "eu" naturalmente, voz pessoal mas profissional.
+- CTA contém scoutcompany.com.br + opção de WhatsApp ({assinatura_telefone}).
 - Termina exatamente assim:
 
 Atenciosamente,
-Equipe Scout
+Leo / Scout
 🌐 scoutcompany.com.br
 📱 WhatsApp: {assinatura_telefone}
 
@@ -142,7 +153,7 @@ Devolve no formato exato (sem "Versão 1", sem alternativa):
 [mensagem única de WhatsApp]
 
 ===EMAIL_ASSUNTO===
-[assunto conciso, máx 60 caracteres. Ex: "Site pro {nome}"]
+[assunto conciso, máx 60 caracteres. Ex: "Site profissional para {nome}"]
 
 ===EMAIL_CORPO===
 [corpo do email]"""
@@ -286,93 +297,99 @@ def gerar_via_template(prospect, assinatura_nome, assinatura_telefone):
         rt = 0.0
         nr = 0
 
-    # Abertura humana com a nota real do Google
+    saudacao = "Oi, aqui é o Leo da Scout!"
+
+    # Linha de elogio baseada na avaliação real (Google Maps)
     if rt >= 4.7 and nr >= 50:
-        abertura = (f"Oi! Vi {artigo} {nome} aqui no Google.\n"
-                    f"{rt:.1f} estrelas com {nr} avaliações. Pegada séria.")
+        elogio = (f"Vi {artigo} {nome} no Google Maps com {rt:.1f} estrelas em {nr} avaliações. "
+                  f"Reputação consistente em {segmento}.")
     elif rt >= 4.5 and nr >= 15:
-        abertura = (f"Oi! Tava olhando {artigo} {nome} no Google, "
-                    f"{rt:.1f} estrelas com {nr} avaliações.")
+        elogio = (f"Vi {artigo} {nome} no Google Maps com {rt:.1f} estrelas e {nr} avaliações. "
+                  f"Trabalho bem reconhecido em {segmento}.")
     elif nr > 0:
-        abertura = (f"Oi! Achei {artigo} {nome} pesquisando {segmento}{em_cidade}.")
+        elogio = f"Encontrei {artigo} {nome} pesquisando {segmento}{em_cidade}."
     else:
-        abertura = (f"Oi! Cheguei {artigo} {nome} pesquisando {segmento}{em_cidade}.")
+        elogio = f"Cheguei até {artigo} {nome} pesquisando {segmento}{em_cidade}."
 
     # Miolo + fechamento variam por serviço
     if servico == "automacao":
-        miolo = ("Você já pensou em automatizar a parte chata?\n"
-                 "Prospectar cliente novo, responder WhatsApp 24h, gerar post sem precisar pensar.\n\n"
-                 "A gente faz isso com IA.")
-        fechamento = "Quer ver como ficaria? scoutcompany.com.br tem uns projetos lá."
+        miolo = ("Você já considerou automatizar a parte mais repetitiva do dia a dia? "
+                 "Prospecção de cliente novo, atendimento de WhatsApp fora do horário e "
+                 "criação de conteúdo recorrente. A Scout monta esse tipo de automação "
+                 "com IA, ajustada pro fluxo da sua empresa.")
+        fechamento = "Posso te mostrar como funciona? scoutcompany.com.br"
     elif servico == "sistema":
-        miolo = (f"Pergunta rápida: como vocês controlam cliente e agenda hoje? Caderno, planilha?\n\n"
-                 f"A gente faz sistema sob medida pra {segmento}. Tudo num lugar só.")
-        fechamento = "Dá uma olhada em scoutcompany.com.br. Se fizer sentido, me responde aqui."
+        miolo = (f"Muita empresa de {segmento} ainda organiza cliente, agenda e financeiro "
+                 "em caderno ou planilha, e isso pesa quando o movimento cresce. A Scout "
+                 "desenvolve sistemas sob medida pra esse tipo de operação, com tudo "
+                 "centralizado num lugar só.")
+        fechamento = "Quer ver alguns exemplos? scoutcompany.com.br"
     else:
-        # site
         if "sem site" in situacao or (not site and not insta):
-            miolo = ("Reparei que vocês não têm site ainda.\n"
-                     f"Sei que parece detalhe, mas muita gente pesquisa {segmento}{em_cidade} antes de ir.")
-            fechamento = "Posso mostrar como ficaria? Tem exemplos em scoutcompany.com.br."
+            miolo = ("Reparei que vocês ainda não têm site. Isso faz diferença porque "
+                     "muita gente pesquisa online antes de visitar ou contratar, e quem "
+                     "não aparece no Google acaba perdendo esse cliente pra concorrência.")
+            fechamento = "Posso mostrar como ficaria para o seu negócio? Tem exemplos em scoutcompany.com.br"
         elif "só instagram" in situacao or (not site and insta):
-            miolo = (f"Vi que vocês estão só no Instagram.\n"
-                     "É um canal bom, mas Instagram não aparece no Google quando alguém pesquisa.\n"
-                     "E cliente novo pesquisa antes de ir.")
-            fechamento = "Quer ver como ficaria um site simples? scoutcompany.com.br tem uns projetos lá."
+            miolo = ("Vi que a presença de vocês está concentrada no Instagram. É um canal "
+                     "importante, mas ele não aparece no Google quando alguém pesquisa pelo "
+                     "serviço, e a maioria dos clientes novos passa por ali antes de fechar.")
+            fechamento = "Posso te mostrar como um site simples resolveria isso? scoutcompany.com.br"
         elif "site desatualizado" in situacao or "site antigo" in situacao or "site fraco" in situacao:
-            miolo = ("Dei uma olhada no site de vocês.\n"
-                     "Dá pra modernizar bastante, principalmente como aparece no celular.\n"
-                     "Site antigo passa impressão de negócio antigo, mesmo quando não é.")
-            fechamento = "Te mando um preview de como ficaria? scoutcompany.com.br tem o estilo da gente."
+            miolo = ("Dei uma olhada no site de vocês e tem pontos que dá pra modernizar, "
+                     "principalmente como ele aparece no celular. Site antigo passa a impressão "
+                     "de negócio antigo, mesmo quando o serviço é de ponta.")
+            fechamento = "Te mando um preview de como ficaria? Os projetos estão em scoutcompany.com.br"
         else:
-            miolo = ("Olhando o digital de vocês, vi uns pontos onde dá pra melhorar.")
-            fechamento = "Posso mostrar em 5 minutos. scoutcompany.com.br tem uns exemplos."
+            miolo = ("Olhando a presença digital de vocês, vi alguns pontos onde a Scout "
+                     "consegue ajudar a melhorar a captação de clientes.")
+            fechamento = "Posso te mostrar em poucos minutos? scoutcompany.com.br"
 
-    whatsapp = f"""{abertura}
+    whatsapp = f"""{saudacao}
+
+{elogio}
 
 {miolo}
 
 {fechamento}"""
 
-    # Email — um pouco mais formal mas sem AI-fala
+    # Email
     if servico == "automacao":
-        email_assunto = f"Automação com IA pro {nome}"
-        problema_email = ("Muita coisa do dia a dia repete sempre igual. Prospecção, "
-                          "primeiro atendimento no WhatsApp, criação de post. "
-                          "A Scout monta automação com IA pra resolver essa parte, "
-                          "sem precisar contratar ninguém.")
+        email_assunto = f"Automação com IA para {nome}"
+        problema_email = ("Muita coisa do dia a dia se repete: prospecção, primeiro "
+                          "atendimento no WhatsApp e criação de conteúdo. A Scout monta "
+                          "automação com IA pra resolver essa parte sem precisar contratar "
+                          "mais gente.")
     elif servico == "sistema":
-        email_assunto = f"Sistema de gestão pro {nome}"
-        problema_email = (f"Muito negócio de {segmento} ainda controla cliente, agenda e financeiro "
-                          "em caderno ou planilha. Quando o volume cresce, isso vira problema. "
-                          "A Scout desenvolve sistema sob medida pra esse tipo de operação.")
+        email_assunto = f"Sistema de gestão para {nome}"
+        problema_email = (f"Muita empresa de {segmento} ainda controla cliente, agenda e "
+                          "financeiro em caderno ou planilha, e isso vira gargalo quando o "
+                          "volume cresce. A Scout desenvolve sistemas sob medida pra esse "
+                          "tipo de operação.")
     else:
         if "sem site" in situacao or (not site and not insta):
-            problema_email = (f"Reparei que vocês não têm site. Quando alguém pesquisa {segmento}"
-                              f"{em_cidade}, quem aparece é a concorrência. Mesmo quando o serviço "
-                              "de vocês é melhor.")
+            problema_email = (f"Reparei que vocês ainda não têm site. Quando alguém "
+                              f"pesquisa {segmento}{em_cidade}, quem aparece é a "
+                              "concorrência, mesmo quando o serviço de vocês é melhor.")
         elif "só instagram" in situacao or (not site and insta):
-            problema_email = (f"Vi que vocês estão só no Instagram ({insta}). É um canal bom, "
-                              "mas Instagram não aparece no Google. Cliente novo pesquisa antes "
-                              "de chegar.")
+            problema_email = (f"Vi que a presença de vocês está concentrada no Instagram "
+                              f"({insta}). É um canal importante, mas não aparece no Google. "
+                              "A maior parte dos clientes novos pesquisa antes de chegar.")
         else:
-            problema_email = ("Dei uma olhada no digital de vocês e vi pontos onde dá pra ajudar.")
-        email_assunto = f"Site pro {nome}"
-
-    abertura_email = abertura.replace("Oi! ", "", 1).strip()
-    if abertura_email:
-        abertura_email = abertura_email[0].upper() + abertura_email[1:]
+            problema_email = ("Dei uma olhada na presença digital de vocês e identifiquei "
+                              "pontos onde a Scout consegue ajudar.")
+        email_assunto = f"Site profissional para {nome}"
 
     email_corpo = f"""Olá!
 
-{abertura_email}
+Aqui é o Leo, da Scout. {elogio}
 
 {problema_email}
 
-Pra conhecer uns projetos, acessa scoutcompany.com.br. Se preferir conversar por WhatsApp, é só me chamar: {assinatura_telefone}.
+Para conhecer alguns projetos, acessa scoutcompany.com.br. Se preferir conversar por WhatsApp, é só me chamar: {assinatura_telefone}.
 
 Atenciosamente,
-Equipe Scout
+Leo / Scout
 🌐 scoutcompany.com.br
 📱 WhatsApp: {assinatura_telefone}
 """
