@@ -27,6 +27,7 @@ import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -91,6 +92,81 @@ PALAVRAS_REJEICAO_CURTAS = {
     "sai", "some", "nao", "não",  # "não" sozinho como resposta direta
 }
 
+# ─── Pergunta de preço direta (curta, sem contexto) ───────────
+# Cliente que manda só "Valores" / "Quanto custa?" antes de qualquer conversa
+# recebe template fixo (com nome do segmento) e SPIN começa naturalmente.
+PALAVRAS_PRECO_DIRETO = [
+    "valores", "valor", "preço", "preco", "preços", "precos",
+    "quanto custa", "quanto fica", "quanto sai", "quanto é",
+    "qual o valor", "qual valor", "qual o preço", "qual preco",
+    "tabela", "tabela de preço", "tabela de preco",
+    "orçamento", "orcamento", "ficou quanto",
+]
+
+# Artigo + pronome por segmento (mesmo "seu/sua" muda gênero em PT-BR).
+SEGMENTO_FRASE = {
+    "restaurante": "o seu restaurante",
+    "pizzaria": "a sua pizzaria",
+    "lanchonete": "a sua lanchonete",
+    "padaria": "a sua padaria",
+    "sorveteria": "a sua sorveteria",
+    "doceria": "a sua doceria",
+    "confeitaria": "a sua confeitaria",
+    "açougue": "o seu açougue",
+    "acougue": "o seu açougue",
+    "hamburgueria": "a sua hamburgueria",
+    "clínica": "a sua clínica",
+    "clinica": "a sua clínica",
+    "consultório": "o seu consultório",
+    "consultorio": "o seu consultório",
+    "farmácia": "a sua farmácia",
+    "farmacia": "a sua farmácia",
+    "academia": "a sua academia",
+    "estúdio": "o seu estúdio",
+    "estudio": "o seu estúdio",
+    "loja": "a sua loja",
+    "barbearia": "a sua barbearia",
+    "salão": "o seu salão",
+    "salao": "o seu salão",
+    "escritório": "o seu escritório",
+    "escritorio": "o seu escritório",
+    "oficina": "a sua oficina",
+    "imobiliária": "a sua imobiliária",
+    "imobiliaria": "a sua imobiliária",
+    "petshop": "o seu petshop",
+    "pet shop": "o seu petshop",
+    "hotel": "o seu hotel",
+    "pousada": "a sua pousada",
+    "agência": "a sua agência",
+    "agencia": "a sua agência",
+}
+
+
+def detectar_preco_direto(texto):
+    """True se a mensagem é curta e bate só com pergunta de preço."""
+    if not texto:
+        return False
+    t = texto.lower().strip()
+    for ch in "!?.,;:":
+        t = t.replace(ch, "")
+    t = " ".join(t.split())
+    if len(t) > 30:
+        return False
+    return any(p in t for p in PALAVRAS_PRECO_DIRETO)
+
+
+def _frase_segmento(seg):
+    if not seg:
+        return "o seu negócio"
+    s = seg.lower().strip()
+    if s in SEGMENTO_FRASE:
+        return SEGMENTO_FRASE[s]
+    for k, v in SEGMENTO_FRASE.items():
+        if k in s:
+            return v
+    return "o seu negócio"
+
+
 # ─── Dúvida / hesitação (não é rejeição, é nudge) ──────────────
 PALAVRAS_DUVIDA = [
     "não sei", "nao sei",
@@ -108,7 +184,8 @@ PALAVRAS_DUVIDA = [
 # ═══════════════════════════════════════════════════════════
 BOTS_CONHECIDOS_PATH = DATA_DIR / "bots_conhecidos.txt"
 
-BOT_DEDUP_RESPOSTA_SEG = 30      # não envia a mesma resposta 2x em 30s
+DEDUP_RESPOSTA_JANELA_SEG = 60     # janela do dedup por similaridade
+DEDUP_RESPOSTA_LIMIAR = 0.70       # ratio mínimo do SequenceMatcher pra considerar duplicada
 LOOP_MENSAGENS_IDENTICAS = 3     # 3+ idênticas em LOOP_JANELA_SEG = bot
 LOOP_JANELA_SEG = 120
 
@@ -245,21 +322,31 @@ def _detectar_loop(conversa, texto_recebido):
 
 
 def _resposta_duplicada(conversa, resposta_proposta):
-    """True se a mesma resposta foi enviada nos últimos BOT_DEDUP_RESPOSTA_SEG."""
+    """True se a resposta proposta é >= DEDUP_RESPOSTA_LIMIAR similar a
+    alguma resposta enviada nos últimos DEDUP_RESPOSTA_JANELA_SEG.
+
+    Match exato é caso particular (ratio=1.0). difflib.SequenceMatcher pega
+    despedidas e variações com mesma intenção mas wording levemente diferente
+    (ex.: 'Tudo bem, Leo entende!' vs 'Entendido, sem problema!')."""
     norm = (resposta_proposta or "").strip().lower()
     if not norm:
         return False
-    cutoff = datetime.now() - timedelta(seconds=BOT_DEDUP_RESPOSTA_SEG)
+    cutoff = datetime.now() - timedelta(seconds=DEDUP_RESPOSTA_JANELA_SEG)
     for m in conversa.get("mensagens", []):
         if m.get("role") != "assistant":
-            continue
-        if (m.get("content") or "").strip().lower() != norm:
             continue
         try:
             ts = datetime.fromisoformat(m["ts"])
         except Exception:
             continue
-        if ts >= cutoff:
+        if ts < cutoff:
+            continue
+        prev = (m.get("content") or "").strip().lower()
+        if not prev:
+            continue
+        if prev == norm:
+            return True
+        if SequenceMatcher(None, prev, norm).ratio() >= DEDUP_RESPOSTA_LIMIAR:
             return True
     return False
 
@@ -624,6 +711,20 @@ def lookup_nome_pipeline(numero):
     return None
 
 
+def lookup_segmento_pipeline(numero):
+    """Acha o segmento do prospect (restaurante, clínica, etc.) — usado pra
+    personalizar a resposta de preço."""
+    pipeline = read_csv(PIPELINE_CSV)
+    if not pipeline:
+        return None
+    digits = "".join(c for c in str(numero) if c.isdigit())
+    for row in pipeline:
+        contato = "".join(c for c in (row.get("contato") or "") if c.isdigit())
+        if contato and (contato in digits or digits in contato):
+            return (row.get("segmento") or "").strip() or None
+    return None
+
+
 # ═══════════════════════════════════════════════════════════
 # Pipeline principal (chamado pelo webhook_server)
 # ═══════════════════════════════════════════════════════════
@@ -757,6 +858,29 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
         save_conversa(numero, conversa)
         return {"sent": False, "reason": "lead_quente_handoff", "lead_quente": True}
 
+    # 5.5. PREÇO DIRETO — cliente manda só "Valores"/"Quanto custa" sem contexto.
+    #      Resposta fixa com nome do segmento (vinda do pipeline) e abre SPIN.
+    #      Só dispara uma vez por número (preco_handled). Próximas perguntas
+    #      sobre preço caem no Claude com a regra do SYSTEM_PROMPT.
+    if detectar_preco_direto(texto_recebido) and not conversa.get("preco_handled"):
+        frase_seg = _frase_segmento(lookup_segmento_pipeline(numero))
+        resposta_preco = (
+            f"Depende do que você precisa! Me conta mais sobre {frase_seg} "
+            f"que monto uma proposta personalizada pra você 😊"
+        )
+        send_resp = send_whatsapp_via_evolution(numero, resposta_preco)
+        if send_resp.get("ok"):
+            conversa["mensagens"].append({
+                "role": "assistant", "content": resposta_preco,
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "dry_run": send_resp.get("dry_run", False),
+            })
+        conversa["preco_handled"] = True
+        save_conversa(numero, conversa)
+        log(f"💰 [{numero}] preço direto — resposta padrão (seg={frase_seg})")
+        return {"sent": send_resp.get("ok", False), "reason": "preco_direto",
+                "lead_quente": False, "resposta": resposta_preco}
+
     # 6. DÚVIDA / hesitação — responde uma vez com texto de spec, sem chamar Claude.
     #    Subsequentes msgs caem no fluxo normal (Claude decide).
     duvida_kw = detectar_duvida(texto_recebido)
@@ -787,10 +911,11 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
         save_conversa(numero, conversa)
         return {"sent": False, "reason": "claude_vazio", "lead_quente": False}
 
-    # 8.5. Dedup por CONTEÚDO: se essa mesma resposta já foi enviada
-    #      nos últimos BOT_DEDUP_RESPOSTA_SEG, não reenvia.
+    # 8.5. Dedup por SIMILARIDADE (>= DEDUP_RESPOSTA_LIMIAR em
+    #      DEDUP_RESPOSTA_JANELA_SEG). Pega despedidas e mensagens
+    #      quase idênticas que escapariam de match exato.
     if _resposta_duplicada(conversa, resposta):
-        log(f"[{numero}] resposta idêntica em <{BOT_DEDUP_RESPOSTA_SEG}s — skip", "INFO")
+        log(f"[{numero}] resposta similar a uma de <{DEDUP_RESPOSTA_JANELA_SEG}s — skip", "INFO")
         save_conversa(numero, conversa)
         return {"sent": False, "reason": "resposta_duplicada",
                 "lead_quente": False, "resposta": resposta}

@@ -634,6 +634,29 @@ def save_conversa(numero, conversa):
     p.write_text(json.dumps(conversa, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def conversa_existe(numero):
+    """True se já existe arquivo conversas/{digits}.json — sinal forte de que
+    já houve algum contato (envio inicial, resposta do cliente, ou ambos).
+    Usado pelo dispatcher pra não reenviar prospecção em número já engajado."""
+    digits = "".join(c for c in str(numero) if c.isdigit())
+    if not digits:
+        return False
+    return (CONVERSAS_DIR / f"{digits}.json").exists()
+
+
+def numeros_com_conversa():
+    """Retorna set de números (só dígitos) que já têm arquivo em conversas/.
+    Evita N stat() calls no dispatcher — uma varredura só."""
+    if not CONVERSAS_DIR.exists():
+        return set()
+    out = set()
+    for p in CONVERSAS_DIR.glob("*.json"):
+        d = "".join(c for c in p.stem if c.isdigit())
+        if d:
+            out.add(d)
+    return out
+
+
 # ═══════════════════════════════════════════════════════════
 # CACHE IDEMPOTENTE — dedup de message_id (Evolution às vezes
 # entrega o mesmo MESSAGES_UPSERT 2x; aqui bloqueamos repetição)

@@ -29,9 +29,31 @@ from _common import (
     PIPELINE_CSV, PIPELINE_FIELDS,
     calcular_max_disparos_hoje, calcular_semana_atual,
     dispatch_dry_run, env, is_horario_habil, load_env, log, log_disparo,
-    marcar_primeiro_disparo_se_preciso, read_csv, read_fila,
-    registrar_volume_dia, send_whatsapp_via_evolution, write_csv, write_fila,
+    marcar_primeiro_disparo_se_preciso, numeros_com_conversa, read_csv,
+    read_fila, registrar_volume_dia, send_whatsapp_via_evolution, write_csv,
+    write_fila,
 )
+
+
+def _digits(s):
+    return "".join(c for c in str(s or "") if c.isdigit())
+
+
+def _enviado_hoje(numero):
+    """True se DISPAROS_LOG tem OK/DRY_RUN/FAIL hoje contendo o número."""
+    d = _digits(numero)
+    if not d or not DISPAROS_LOG.exists():
+        return False
+    hoje_str = date.today().isoformat()
+    with open(DISPAROS_LOG, encoding="utf-8") as f:
+        for line in f:
+            if not line.startswith(f"[{hoje_str}"):
+                continue
+            if " RODADA " in line:
+                continue
+            if d in line and (("OK " in line) or ("DRY_RUN " in line) or ("FAIL " in line)):
+                return True
+    return False
 
 
 def _tentativas_hoje():
@@ -124,17 +146,18 @@ def main():
         return
 
     fila = read_fila()
-    # Dedup cross-day forte: nunca repete número/id já abordado em qualquer momento
-    # (dispatcher confere de novo mesmo o enqueue já filtrando — defesa em profundidade)
+    # Dedup cross-day forte: nunca repete número/id já abordado em qualquer momento.
+    # Comparações sempre por dígitos puros — formatos divergem (wa.me, +55, etc).
     contactados_alguma_vez_num = set()
     contactados_alguma_vez_id = set()
     for x in fila["items"]:
         if x.get("status") in ("enviado", "dryrun", "falha"):
-            if x.get("whatsapp"):
-                contactados_alguma_vez_num.add(x["whatsapp"])
+            d = _digits(x.get("whatsapp"))
+            if d:
+                contactados_alguma_vez_num.add(d)
             if x.get("id"):
                 contactados_alguma_vez_id.add(x["id"])
-    # Cruza também com pipeline.csv (caso prospect tenha sido abordado manualmente)
+    # Pipeline.csv: prospects abordados manualmente ou em rodadas anteriores.
     for p in read_csv(PIPELINE_CSV):
         status = (p.get("status") or "").strip().lower()
         ja_marcado = (status and status not in ("", "novo", "sem contato")) or bool(p.get("data_envio_site"))
@@ -142,9 +165,12 @@ def main():
             continue
         if p.get("id"):
             contactados_alguma_vez_id.add(p["id"])
-        contato_digits = "".join(c for c in (p.get("contato") or "") if c.isdigit())
-        if contato_digits:
-            contactados_alguma_vez_num.add(contato_digits)
+        d = _digits(p.get("contato"))
+        if d:
+            contactados_alguma_vez_num.add(d)
+    # ★ Sinal mais forte: número tem arquivo em conversas/ → JÁ engajado (envio
+    # inicial + qualquer resposta cria o arquivo). Nunca reenvia prospecção.
+    contactados_alguma_vez_num |= numeros_com_conversa()
 
     pendentes = [x for x in fila["items"] if x.get("status") == "pendente"]
     elegiveis = []
@@ -156,12 +182,20 @@ def main():
             continue
         if alvo > agora:
             continue
-        # ★ DEDUP FORTE: número OU id já contactado em algum momento → bloqueia + marca como skip
-        if (it.get("whatsapp") in contactados_alguma_vez_num
-                or it.get("id") in contactados_alguma_vez_id):
+        d_wa = _digits(it.get("whatsapp"))
+        if (d_wa and d_wa in contactados_alguma_vez_num) \
+                or it.get("id") in contactados_alguma_vez_id:
             it["status"] = "skip_duplicado"
             it["skipado_em"] = agora.isoformat(timespec="seconds")
             pulados_dedup += 1
+            log(f"[SKIP] número {d_wa} já tem conversa/abordado — pulando prospecção", "INFO")
+            continue
+        # Defesa adicional "hoje": disparos.log já tem entrada hoje pra esse número.
+        if d_wa and _enviado_hoje(d_wa):
+            it["status"] = "skip_duplicado_hoje"
+            it["skipado_em"] = agora.isoformat(timespec="seconds")
+            pulados_dedup += 1
+            log(f"[SKIP] número {d_wa} já recebeu mensagem hoje", "INFO")
             continue
         elegiveis.append(it)
     if pulados_dedup:
@@ -199,10 +233,12 @@ def main():
         if not numero or not texto:
             item["status"] = "invalido"
             continue
-        if numero in tentados_hoje:
+        numero_digits = _digits(numero)
+        if numero_digits in tentados_hoje:
             # dois itens na fila com mesmo número — dispara só o primeiro
             item["status"] = "skip_duplicado"
             item["skipado_em"] = datetime.now().isoformat(timespec="seconds")
+            log(f"[SKIP] número {numero_digits} já tentado nessa rodada", "INFO")
             continue
 
         # Registra primeiro disparo (se ainda não há) — marca semana 1 dia 1
@@ -225,7 +261,7 @@ def main():
             atualizar_pipeline_falha(item.get("id"), resp.get("status", "?"))
             log(f"✗ FALHA {nome} ({numero}): {resp.get('status')} — segue pro próximo", "ERROR")
 
-        tentados_hoje.add(numero)
+        tentados_hoje.add(numero_digits)
 
         # Intervalo aleatório só em LIVE (vale pra sucesso E falha)
         if not dry_run and tentativas_rodada < limite_rodada:
