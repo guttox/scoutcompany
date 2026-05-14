@@ -27,5 +27,17 @@ RUN mkdir -p /app/data /app/conversas /app/mensagens /app/logs /app/relatorios
 
 EXPOSE 5005
 
-# Default: webhook server. Cron jobs usam `docker compose exec` ou override.
-CMD ["python", "scripts/webhook_server.py"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:5005/health || exit 1
+
+# Production: gunicorn com 4 workers × 4 threads (até 16 requests paralelas).
+# Substitui Flask dev server (frágil, single-process, sem auto-recovery).
+# Se um worker travar, gunicorn reinicia ele sozinho.
+# Healthcheck + restart: unless-stopped no compose = Docker reinicia se ficar unhealthy.
+CMD ["gunicorn", "--bind", "0.0.0.0:5005", \
+     "--workers", "4", "--threads", "4", \
+     "--worker-class", "gthread", \
+     "--timeout", "60", "--graceful-timeout", "20", \
+     "--access-logfile", "-", "--error-logfile", "-", \
+     "--chdir", "scripts", \
+     "webhook_server:app"]
