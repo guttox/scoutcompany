@@ -20,7 +20,9 @@ services:
       # Internamente, scout-app fala com Evolution pelo hostname do compose
       EVOLUTION_URL: http://evolution:8080
     ports:
-      - "5005:5005"
+      # bind 127.0.0.1: webhook só acessível via SSH tunnel
+      # (Docker bypassa UFW — precisa restringir aqui na porta de host)
+      - "127.0.0.1:5005:5005"
     volumes:
       - ./data:/app/data
       - ./conversas:/app/conversas
@@ -38,7 +40,9 @@ services:
     container_name: evolution
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      # bind 127.0.0.1: Evolution API só acessível via SSH tunnel
+      # (Docker bypassa UFW — precisa restringir aqui na porta de host)
+      - "127.0.0.1:8080:8080"
     environment:
       AUTHENTICATION_API_KEY: ${EVOLUTION_APIKEY}
       DATABASE_ENABLED: "true"
