@@ -17,6 +17,8 @@ Uso:
   python3 dispatcher.py --force     # ignora janela global (DEBUG)
 """
 import argparse
+import fcntl
+import os
 import random
 import sys
 import time
@@ -25,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import (
-    DISPAROS_LOG, INTERVALO_MAX_SEG, INTERVALO_MIN_SEG,
+    DATA_DIR, DISPAROS_LOG, INTERVALO_MAX_SEG, INTERVALO_MIN_SEG,
     PIPELINE_CSV, PIPELINE_FIELDS,
     calcular_max_disparos_hoje, calcular_semana_atual,
     dispatch_dry_run, env, is_horario_habil, load_env, log, log_disparo,
@@ -33,6 +35,26 @@ from _common import (
     read_fila, registrar_volume_dia, send_whatsapp_via_evolution, write_csv,
     write_fila,
 )
+
+LOCK_PATH = DATA_DIR / "dispatcher.lock"
+
+
+def _adquirir_lock():
+    """Tenta pegar lock exclusivo não-bloqueante. Devolve o file handle se
+    conseguiu, None se outra instância já está rodando. O caller PRECISA
+    segurar a referência até o fim (close() libera o lock automaticamente).
+    Sem isso, corre risco de duas instâncias do dispatcher rodando em paralelo
+    (cron a cada 10min + tentativas que duram 30-60min)."""
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(LOCK_PATH, "w")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fh.close()
+        return None
+    fh.write(f"pid={os.getpid()} desde={datetime.now().isoformat(timespec='seconds')}\n")
+    fh.flush()
+    return fh
 
 
 def _digits(s):
@@ -124,6 +146,25 @@ def main():
                         help="Ignora janela global de horário (debug)")
     args = parser.parse_args()
 
+    # ★ LOCK: cron dispara a cada 10min, mas uma rodada pode levar 30-60min.
+    # Sem lock, N instâncias rodam em paralelo, cada uma com seu tentados_hoje,
+    # e a fila é lida várias vezes antes do primeiro write_fila — gerando
+    # envios duplicados pro mesmo número.
+    lock_fh = _adquirir_lock()
+    if lock_fh is None:
+        log("Outra instância do dispatcher já está rodando — saindo.", "INFO")
+        return
+    try:
+        _main_locked(args)
+    finally:
+        try:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        lock_fh.close()
+
+
+def _main_locked(args):
     # Inicializa cedo pra evitar NameError em qualquer return precoce.
     # tentativas_hoje (int) ≠ tentados_hoje (set): contador do dia vs dedup da rodada.
     tentativas_hoje = 0
