@@ -43,7 +43,7 @@ from _common import (
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
 ANTHROPIC_MAX_TOKENS = 350
 
-ANTI_SPAM_SEGUNDOS = 15          # mesma pessoa não responde +1x a cada 15s
+ANTI_SPAM_SEGUNDOS = 5           # só bloqueia repetição EXATA da última msg do user em <5s
 DELAY_MIN_SEG = 5                # delay humano antes de responder
 DELAY_MAX_SEG = 15
 HISTORICO_LIMITE_CTX = 10        # quantas msgs anteriores mandar pro Claude
@@ -830,16 +830,27 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
                 "blacklisted": True,
                 "resposta": resposta_rej}
 
-    # 3. Anti-spam: respondi essa pessoa há menos de 15s?
-    ultimas = [m for m in conversa.get("mensagens", []) if m.get("role") == "assistant"]
-    if ultimas:
+    # 3. Anti-spam: SÓ bloqueia se a MESMA mensagem do user chegou 2x em <5s.
+    #    Cliente engajado que responde rápido com conteúdo NOVO não é spam —
+    #    o Leo deve responder sempre que houver conteúdo diferente, mesmo em <5s.
+    #    (regressão histórica: cliente respondia em 2s e o Leo travava por 15s,
+    #    perdendo o lead.)
+    ultimas_user = [m for m in conversa.get("mensagens", []) if m.get("role") == "user"]
+    if ultimas_user:
         try:
-            ts_ultima = datetime.fromisoformat(ultimas[-1]["ts"])
-            if (datetime.now() - ts_ultima).total_seconds() < ANTI_SPAM_SEGUNDOS:
-                log(f"[{numero}] anti-spam: respondi há <{ANTI_SPAM_SEGUNDOS}s, skip", "INFO")
+            ultima = ultimas_user[-1]
+            ts_ultima = datetime.fromisoformat(ultima["ts"])
+            dentro_janela = (datetime.now() - ts_ultima).total_seconds() < ANTI_SPAM_SEGUNDOS
+            mesma_msg = (
+                (ultima.get("content") or "").strip().lower()
+                == (texto_recebido or "").strip().lower()
+            )
+            if dentro_janela and mesma_msg:
+                log(f"[{numero}] anti-spam: mesma msg em <{ANTI_SPAM_SEGUNDOS}s, skip", "INFO")
                 _append_user_msg()
                 save_conversa(numero, conversa)
-                return {"sent": False, "reason": "anti_spam", "lead_quente": False}
+                return {"sent": False, "reason": "anti_spam_msg_repetida",
+                        "lead_quente": False}
         except Exception:
             pass
 
