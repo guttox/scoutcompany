@@ -21,6 +21,7 @@ Pode rodar standalone só pra testar prompt:
 import argparse
 import json
 import random
+import re
 import sys
 import time
 import urllib.parse
@@ -30,8 +31,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import (
-    LOG_DIR, PIPELINE_CSV, PIPELINE_FIELDS, add_numero_to_blacklist, env,
-    is_numero_blacklisted, load_conversa, load_env, log, read_csv,
+    DATA_DIR, LOG_DIR, PIPELINE_CSV, PIPELINE_FIELDS, add_numero_to_blacklist,
+    env, is_numero_blacklisted, load_conversa, load_env, log, read_csv,
     save_conversa, send_whatsapp_via_evolution, write_csv,
 )
 
@@ -101,6 +102,190 @@ PALAVRAS_DUVIDA = [
     "sem grana", "sem orçamento", "sem orcamento",
     "não dá agora", "nao da agora", "agora não", "agora nao",
 ]
+
+# ═══════════════════════════════════════════════════════════
+# DETECÇÃO DE BOT / WHATSAPP BUSINESS / CARDÁPIO AUTOMÁTICO
+# ═══════════════════════════════════════════════════════════
+BOTS_CONHECIDOS_PATH = DATA_DIR / "bots_conhecidos.txt"
+
+BOT_DEDUP_RESPOSTA_SEG = 30      # não envia a mesma resposta 2x em 30s
+LOOP_MENSAGENS_IDENTICAS = 3     # 3+ idênticas em LOOP_JANELA_SEG = bot
+LOOP_JANELA_SEG = 120
+
+# URLs típicas de bot de delivery / cardápio digital
+BOT_URL_PATTERNS = [
+    "ifood.com", "rappi.com", "uber.com", "ubereats.com",
+    "aiqfome.com", "mykeeta.com", "keeta.com", "99food", "99app.com",
+    "anota.ai", "goomer.app", "neemo.com.br", "delivery.much.com",
+]
+
+# Frases recorrentes de WhatsApp Business / atendimento automático
+BOT_FRASES = [
+    "agradece seu contato", "agradecemos seu contato", "agradecemos o contato",
+    "como podemos ajudar?", "como podemos te ajudar",
+    "pedido automático", "pedido automatico",
+    "resposta automática", "resposta automatica",
+    "mensagem automática", "mensagem automatica",
+    "atendimento automático", "atendimento automatico",
+    "somente via", "apenas via", "pedidos somente",
+    "horário de funcionamento", "horario de funcionamento",
+    "horário de atendimento", "horario de atendimento",
+    "cardápio digital", "cardapio digital", "nosso cardápio", "nosso cardapio",
+    "faça seu pedido", "faca seu pedido",
+]
+
+# Emojis estruturados típicos de menus/bots
+BOT_EMOJIS_ESTRUTURADOS = ["🛵", "✅", "📋", "📲", "🍔", "🍕", "📦",
+                            "🛒", "🏪", "📞", "🕐", "🕒", "📍", "🔔"]
+
+PRICE_REGEX = re.compile(r"R\$\s*\d+[,\.]\d{2}")
+URL_REGEX = re.compile(r"https?://\S+|www\.\S+")
+EMOJI_REGEX = re.compile(
+    "["
+    "\U0001F300-\U0001F9FF"
+    "\U0001FA70-\U0001FAFF"
+    "\U00002600-\U000027BF"
+    "]"
+)
+
+# Motivos "soft": ignora a mensagem mas NÃO marca o número como bot
+# (poderia ser um humano mandando "Oi" ou só um link colado por engano).
+SOFT_BOT_MOTIVOS = {"muito_curta", "so_emojis", "so_link"}
+
+
+def detectar_bot_whatsapp(texto):
+    """Retorna motivo (str) se a mensagem parece bot/cardápio/auto, senão None."""
+    if not texto:
+        return None
+    t = texto.strip()
+    t_lower = t.lower()
+
+    if len(t) < 3:
+        return "muito_curta"
+
+    for url in BOT_URL_PATTERNS:
+        if url in t_lower:
+            return f"url_delivery:{url}"
+
+    for frase in BOT_FRASES:
+        if frase in t_lower:
+            return f"frase_auto:{frase[:40]}"
+
+    if len(PRICE_REGEX.findall(t)) >= 2:
+        return "cardapio_precos"
+
+    sem_url = URL_REGEX.sub("", t).strip()
+    if URL_REGEX.search(t) and len(sem_url) < 3:
+        return "so_link"
+
+    sem_emoji = EMOJI_REGEX.sub("", t).strip()
+    if not sem_emoji:
+        return "so_emojis"
+
+    inicio = t[:30]
+    if sum(1 for e in BOT_EMOJIS_ESTRUTURADOS if e in inicio) >= 2:
+        return "emojis_estruturados_inicio"
+    if len(EMOJI_REGEX.findall(inicio)) >= 3:
+        return "muitos_emojis_inicio"
+
+    return None
+
+
+def _bot_conhecido(numero):
+    digits = "".join(c for c in str(numero) if c.isdigit())
+    if not digits or not BOTS_CONHECIDOS_PATH.exists():
+        return False
+    for raw in BOTS_CONHECIDOS_PATH.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        n_digits = "".join(c for c in line.split("|")[0] if c.isdigit())
+        if n_digits and n_digits == digits:
+            return True
+    return False
+
+
+def _registrar_bot(numero, motivo):
+    digits = "".join(c for c in str(numero) if c.isdigit())
+    if not digits or _bot_conhecido(numero):
+        return
+    BOTS_CONHECIDOS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not BOTS_CONHECIDOS_PATH.exists():
+        BOTS_CONHECIDOS_PATH.write_text(
+            "# Scout — números detectados como bots/automação. Não responder.\n"
+            "# Formato: numero | motivo | timestamp\n",
+            encoding="utf-8",
+        )
+    with open(BOTS_CONHECIDOS_PATH, "a", encoding="utf-8") as f:
+        f.write(f"{digits} | {motivo} | "
+                f"{datetime.now().isoformat(timespec='seconds')}\n")
+
+
+def _detectar_loop(conversa, texto_recebido):
+    """3+ msgs idênticas do user em LOOP_JANELA_SEG (inclui msg atual na contagem)."""
+    if not texto_recebido:
+        return False
+    cutoff = datetime.now() - timedelta(seconds=LOOP_JANELA_SEG)
+    norm = texto_recebido.strip().lower()
+    count = 1  # mensagem que acabou de chegar
+    for m in conversa.get("mensagens", []):
+        if m.get("role") != "user":
+            continue
+        if (m.get("content") or "").strip().lower() != norm:
+            continue
+        try:
+            ts = datetime.fromisoformat(m["ts"])
+        except Exception:
+            continue
+        if ts >= cutoff:
+            count += 1
+            if count >= LOOP_MENSAGENS_IDENTICAS:
+                return True
+    return False
+
+
+def _resposta_duplicada(conversa, resposta_proposta):
+    """True se a mesma resposta foi enviada nos últimos BOT_DEDUP_RESPOSTA_SEG."""
+    norm = (resposta_proposta or "").strip().lower()
+    if not norm:
+        return False
+    cutoff = datetime.now() - timedelta(seconds=BOT_DEDUP_RESPOSTA_SEG)
+    for m in conversa.get("mensagens", []):
+        if m.get("role") != "assistant":
+            continue
+        if (m.get("content") or "").strip().lower() != norm:
+            continue
+        try:
+            ts = datetime.fromisoformat(m["ts"])
+        except Exception:
+            continue
+        if ts >= cutoff:
+            return True
+    return False
+
+
+def _marcar_bot_pipeline(numero, motivo):
+    """Marca status='Bot detectado' na linha do pipeline cujo contato bate."""
+    pipeline = read_csv(PIPELINE_CSV)
+    if not pipeline:
+        return None
+    digits = "".join(c for c in str(numero) if c.isdigit())
+    nome_match = None
+    for row in pipeline:
+        contato = "".join(c for c in (row.get("contato") or "") if c.isdigit())
+        if contato and (contato in digits or digits in contato):
+            row["status"] = "Bot detectado"
+            obs = (row.get("observacao") or "").strip()
+            if obs:
+                obs += " | "
+            obs += f"bot {motivo} em {datetime.now().isoformat(timespec='seconds')}"
+            row["observacao"] = obs
+            nome_match = row.get("nome", "")
+            break
+    if nome_match:
+        write_csv(PIPELINE_CSV, pipeline, PIPELINE_FIELDS)
+    return nome_match
+
 
 # ─── Respostas padrão (texto do spec, não passa por Claude) ─────
 RESPOSTA_REJEICAO_EDUCADA = (
@@ -452,6 +637,11 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
     if not texto_recebido or not numero:
         return {"sent": False, "reason": "vazio", "lead_quente": False}
 
+    # 0a. Número já catalogado como bot → silêncio total, sem I/O.
+    if _bot_conhecido(numero):
+        log(f"[IGNORADO] bot conhecido — número={numero}", "INFO")
+        return {"sent": False, "reason": "bot_conhecido", "lead_quente": False}
+
     conversa = load_conversa(numero)
     now_iso = datetime.now().isoformat(timespec="seconds")
 
@@ -473,6 +663,40 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
         _append_user_msg()
         save_conversa(numero, conversa)
         return {"sent": False, "reason": "lead_quente_silencio", "lead_quente": True}
+
+    # 1.5. BOT / cardápio digital / WhatsApp Business automático.
+    #      Detectado por conteúdo da mensagem — ignora sem chamar Claude.
+    bot_motivo = detectar_bot_whatsapp(texto_recebido)
+    if bot_motivo:
+        if bot_motivo in SOFT_BOT_MOTIVOS:
+            # Padrão fraco (msg curta, só link, só emojis) — pula resposta
+            # mas não marca o número como bot para sempre.
+            log(f"[IGNORADO] fora de contexto ({bot_motivo}) — número={numero}", "INFO")
+            _append_user_msg()
+            save_conversa(numero, conversa)
+            return {"sent": False, "reason": f"ignorado:{bot_motivo}",
+                    "lead_quente": False}
+        log(f"[IGNORADO] bot WhatsApp Business detectado: {bot_motivo} — número={numero}",
+            "INFO")
+        _registrar_bot(numero, bot_motivo)
+        try:
+            _marcar_bot_pipeline(numero, bot_motivo)
+        except Exception as e:
+            log(f"falhou marcar bot na pipeline: {e}", "ERROR")
+        return {"sent": False, "reason": f"bot:{bot_motivo}", "lead_quente": False}
+
+    # 1.6. LOOP: 3+ mensagens idênticas em LOOP_JANELA_SEG → bot.
+    if _detectar_loop(conversa, texto_recebido):
+        motivo = f"loop_{LOOP_MENSAGENS_IDENTICAS}x_{LOOP_JANELA_SEG}s"
+        log(f"[IGNORADO] LOOP detectado ({motivo}) — número={numero}", "INFO")
+        _registrar_bot(numero, motivo)
+        try:
+            _marcar_bot_pipeline(numero, motivo)
+        except Exception as e:
+            log(f"falhou marcar bot na pipeline (loop): {e}", "ERROR")
+        _append_user_msg()
+        save_conversa(numero, conversa)
+        return {"sent": False, "reason": motivo, "lead_quente": False}
 
     # 2. REJEIÇÃO — detectada ANTES de anti-spam (sempre honra o pedido de parada)
     tipo_rej, palavra_rej = detectar_rejeicao(texto_recebido)
@@ -560,6 +784,14 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
         log(f"[{numero}] Claude devolveu vazio — abortando", "ERROR")
         save_conversa(numero, conversa)
         return {"sent": False, "reason": "claude_vazio", "lead_quente": False}
+
+    # 8.5. Dedup por CONTEÚDO: se essa mesma resposta já foi enviada
+    #      nos últimos BOT_DEDUP_RESPOSTA_SEG, não reenvia.
+    if _resposta_duplicada(conversa, resposta):
+        log(f"[{numero}] resposta idêntica em <{BOT_DEDUP_RESPOSTA_SEG}s — skip", "INFO")
+        save_conversa(numero, conversa)
+        return {"sent": False, "reason": "resposta_duplicada",
+                "lead_quente": False, "resposta": resposta}
 
     # 9. Envia via Evolution (respeita SCOUT_DRY_RUN)
     send_resp = send_whatsapp_via_evolution(numero, resposta)
