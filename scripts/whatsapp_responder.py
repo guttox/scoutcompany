@@ -389,6 +389,21 @@ RESPOSTA_REJEICAO_AGRESSIVA = (
     "Qualquer dia que precisar, a Scout está à disposição."
 )
 
+# ─── Inbound cold welcome — cliente que chega frio (sem prospecção) ──
+# Resposta determinística pra primeira mensagem de quem nunca recebeu
+# nossa prospecção. Apresenta os 3 serviços de forma fluida (sem bullets,
+# sem travessão) e abre o SPIN com pergunta de Situação. Zero token Claude.
+RESPOSTA_INBOUND_COLD = (
+    "Olá! Aqui é o Leo, da Scout 👋\n\n"
+    "A gente ajuda negócios a crescerem com tecnologia em três frentes: "
+    "sites profissionais pra quem quer aparecer no Google e converter "
+    "visitantes, sistemas de gestão pra empresas que ainda controlam "
+    "tudo em papel ou planilha, e automação com IA pra atendimento 24h "
+    "e prospecção que roda sem você precisar acompanhar.\n\n"
+    "Pra eu te direcionar bem, me conta: qual é o seu negócio e o que "
+    "você está buscando resolver?"
+)
+
 RESPOSTA_DUVIDA = (
     "Entendo completamente!\n\n"
     "Não precisa decidir agora. Se quiser tirar alguma dúvida antes ou "
@@ -544,9 +559,25 @@ def _gerar_resposta_claude(historico, mensagem_recebida):
             resp = client.messages.create(
                 model=env("ANTHROPIC_MODEL", ANTHROPIC_MODEL),
                 max_tokens=ANTHROPIC_MAX_TOKENS,
-                system=SYSTEM_PROMPT,
+                # Prompt caching no SYSTEM_PROMPT — ~3K tokens estáveis.
+                # 1ª chamada paga 1.25x (write), próximas dentro de 5min pagam 0.1x.
+                # Em horário de pico (várias mensagens em <5min), economia ~70% do
+                # input. Sem isso, cada call pagava o prompt inteiro full price.
+                system=[
+                    {
+                        "type": "text",
+                        "text": SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
                 messages=msgs,
             )
+            cache_hit = getattr(resp.usage, "cache_read_input_tokens", 0)
+            cache_write = getattr(resp.usage, "cache_creation_input_tokens", 0)
+            if cache_hit or cache_write:
+                log(f"claude usage: input={resp.usage.input_tokens} "
+                    f"cache_read={cache_hit} cache_write={cache_write} "
+                    f"output={resp.usage.output_tokens}", "INFO")
             for block in resp.content:
                 if getattr(block, "type", None) == "text":
                     return block.text.strip()
@@ -711,6 +742,35 @@ def lookup_nome_pipeline(numero):
     return None
 
 
+def _is_inbound_cold(numero, conversa):
+    """True se é o PRIMEIRO contato com esse número E ele não veio da nossa
+    prospecção (sem data_envio_site na pipeline). Cliente que chegou frio
+    via WhatsApp sem nunca ter recebido nossa abordagem.
+
+    Casos cobertos:
+      - Conversa sem nenhuma msg de assistant ainda
+      - Pipeline sem entry pro número (descoberta orgânica) → inbound
+      - Pipeline com entry mas sem data_envio_site (status Novo, nunca
+        prospectamos) → inbound
+      - Pipeline com data_envio_site preenchido (nós mandamos prospecção) →
+        NÃO é cold, ele está respondendo nosso pitch
+    """
+    for m in conversa.get("mensagens", []):
+        if m.get("role") == "assistant":
+            return False
+    pipeline = read_csv(PIPELINE_CSV)
+    if not pipeline:
+        return True
+    digits = "".join(c for c in str(numero) if c.isdigit())
+    for row in pipeline:
+        contato = "".join(c for c in (row.get("contato") or "") if c.isdigit())
+        if contato and (contato in digits or digits in contato):
+            if (row.get("data_envio_site") or "").strip():
+                return False
+            return True
+    return True
+
+
 def lookup_segmento_pipeline(numero):
     """Acha o segmento do prospect (restaurante, clínica, etc.) — usado pra
     personalizar a resposta de preço."""
@@ -868,6 +928,22 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
         log(f"🔥 [{numero}] LEAD QUENTE detectado: '{intencao}' — alerta enviado")
         save_conversa(numero, conversa)
         return {"sent": False, "reason": "lead_quente_handoff", "lead_quente": True}
+
+    # 5.4. INBOUND COLD — primeiro contato sem prospecção prévia.
+    #      Apresenta os 3 serviços e abre SPIN. Determinístico, zero token Claude.
+    #      Próximas mensagens caem no Claude com a regra do SYSTEM_PROMPT.
+    if _is_inbound_cold(numero, conversa):
+        send_resp = send_whatsapp_via_evolution(numero, RESPOSTA_INBOUND_COLD)
+        if send_resp.get("ok"):
+            conversa["mensagens"].append({
+                "role": "assistant", "content": RESPOSTA_INBOUND_COLD,
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "dry_run": send_resp.get("dry_run", False),
+            })
+        save_conversa(numero, conversa)
+        log(f"👋 [{numero}] inbound cold — boas-vindas com 3 serviços")
+        return {"sent": send_resp.get("ok", False), "reason": "inbound_cold",
+                "lead_quente": False, "resposta": RESPOSTA_INBOUND_COLD}
 
     # 5.5. PREÇO DIRETO — cliente manda só "Valores"/"Quanto custa" sem contexto.
     #      Resposta fixa com nome do segmento (vinda do pipeline) e abre SPIN.
