@@ -102,6 +102,12 @@ def main():
                         help="Ignora janela global de horário (debug)")
     args = parser.parse_args()
 
+    # Inicializa cedo pra evitar NameError em qualquer return precoce.
+    # tentativas_hoje (int) ≠ tentados_hoje (set): contador do dia vs dedup da rodada.
+    tentativas_hoje = 0
+    tentativas_rodada = 0
+    tentados_hoje = set()
+
     dry_run = dispatch_dry_run()
     semana = calcular_semana_atual()
     max_dia = calcular_max_disparos_hoje()
@@ -168,9 +174,7 @@ def main():
     log(f"Dispatcher: {len(elegiveis)} elegíveis · tentativas hoje {tentativas_hoje}/{max_dia} · "
         f"DRY_RUN={dry_run}")
 
-    tentativas_rodada = 0
     limite_rodada = args.max if args.max else max_dia - tentativas_hoje
-    tentados_hoje = set()  # dedup local da rodada (evita retry de item duplicado na fila)
 
     # Ordena pelos mais antigos primeiro (FIFO)
     elegiveis.sort(key=lambda x: x.get("agendado_para", ""))
