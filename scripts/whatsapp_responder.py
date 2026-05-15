@@ -256,6 +256,23 @@ EMOJI_REGEX = re.compile(
 # (poderia ser um humano mandando "Oi" ou só um link colado por engano).
 SOFT_BOT_MOTIVOS = {"muito_curta", "so_emojis", "so_link"}
 
+# Prefixos que, NA PRIMEIRA mensagem do número, devem ser tratados como soft —
+# muitas PMEs têm auto-greeting do WhatsApp Business antes do dono humano ler.
+# Se vier UMA SEGUNDA mensagem auto do mesmo número, aí sim marca HARD.
+# Padrões inequívocos (atendente_virtual, url_delivery, loop, bot_pattern,
+# cardapio_instagram, etc.) NÃO entram aqui — esses banem na 1ª.
+FIRST_TIME_SOFT_PREFIXES = (
+    "frase_auto:",
+    "cardapio_precos",
+    "emojis_estruturados_inicio",
+    "muitos_emojis_inicio",
+)
+
+# Tempo mínimo desde o último disparo do Scout pra considerar "resposta humana"
+# mesmo com padrão de bot. Bots de WhatsApp Business respondem em segundos;
+# se demorou >5 min, provavelmente um humano leu e tá respondendo.
+DELAY_HUMANO_MIN_SEG = 300
+
 
 def detectar_bot_whatsapp(texto, conversa=None):
     """Retorna motivo (str) se a mensagem parece bot/cardápio/auto, senão None.
@@ -926,6 +943,32 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
             save_conversa(numero, conversa)
             return {"sent": False, "reason": f"ignorado:{bot_motivo}",
                     "lead_quente": False}
+
+        # Padrão é "soft-first-time" (auto-greeting de WA Business típico)?
+        # Bot responde em segundos; humano demora minutos.
+        # Se delay desde último disparo do Scout for >= 5min, NÃO bane —
+        # provavelmente o dono humano leu e tá respondendo, não auto-bot.
+        if bot_motivo.startswith(FIRST_TIME_SOFT_PREFIXES):
+            delay_seg = None
+            for m in reversed(conversa.get("mensagens", [])):
+                if m.get("role") != "assistant":
+                    continue
+                try:
+                    ts = datetime.fromisoformat(m["ts"])
+                    delay_seg = (datetime.now() - ts).total_seconds()
+                except Exception:
+                    pass
+                break
+            if delay_seg is not None and delay_seg >= DELAY_HUMANO_MIN_SEG:
+                log(f"[BOT] padrão soft + delay {int(delay_seg)}s (>=5min) — "
+                    f"trato como humano, não bane ({bot_motivo}) — "
+                    f"número={numero}", "INFO")
+                _append_user_msg()
+                save_conversa(numero, conversa)
+                return {"sent": False,
+                        "reason": f"humano_delay:{bot_motivo}",
+                        "lead_quente": False}
+
         log(f"[BOT] padrão detectado: {bot_motivo} — número={numero}", "INFO")
         _registrar_bot(numero, bot_motivo)
         try:
