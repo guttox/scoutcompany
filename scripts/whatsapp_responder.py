@@ -759,6 +759,90 @@ def detectar_duvida(texto):
     return None
 
 
+# ═══════════════════════════════════════════════════════════
+# Detector ENCERRAMENTO (despedidas formais + redirect pra email)
+# ═══════════════════════════════════════════════════════════
+# Bots de atendimento (e gerentes formais) costumam fechar a conversa com
+# despedidas educadas. Sem esse detector, o Claude trocava "até mais" por
+# "até mais" em loop, queimando ~15 chamadas da API por conversa.
+
+PALAVRAS_DESPEDIDA = [
+    "até breve", "ate breve",
+    "até mais", "ate mais",
+    "até logo", "ate logo",
+    "até a próxima", "ate a proxima",
+    "tenha um bom dia", "tenha um ótimo dia", "tenha um otimo dia",
+    "tenha uma boa tarde", "tenha uma ótima tarde", "tenha uma otima tarde",
+    "tenha uma boa noite", "tenha uma ótima noite", "tenha uma otima noite",
+    "desejo sucesso", "muito sucesso pra voce", "muito sucesso pra você",
+    "sucesso pra voce", "sucesso pra você",
+    "será sempre um prazer", "sera sempre um prazer",
+    "é sempre um prazer", "e sempre um prazer",
+    "conte sempre conosco", "conte conosco",
+    "obrigado pelo contato", "obrigada pelo contato",
+    "obrigado pela atenção", "obrigada pela atenção",
+    "obrigado pela atencao", "obrigada pela atencao",
+    "fico à disposição", "fico a disposicao", "fico a disposição",
+    "ficamos à disposição", "ficamos a disposicao",
+]
+
+PALAVRAS_REDIRECT_EMAIL = [
+    "envie por e-mail", "envie por email",
+    "envie pelo e-mail", "envie pelo email",
+    "entre em contato por e-mail", "entre em contato por email",
+    "encaminhe por e-mail", "encaminhe por email",
+    "encaminhar por e-mail", "encaminhar por email",
+    "contato oficial é", "contato oficial e",
+    "pedimos que envie",
+    "estamos à disposição pelo e-mail", "estamos a disposicao pelo email",
+    "mande no e-mail", "mande no email",
+    "manda pro e-mail", "manda pro email",
+    "favor enviar e-mail", "favor enviar email",
+    "envie um e-mail", "envie um email",
+    "manda um e-mail", "manda um email",
+]
+
+
+def detectar_despedida(texto):
+    """Retorna a frase de despedida encontrada (str) ou None."""
+    if not texto:
+        return None
+    t = texto.lower()
+    for kw in PALAVRAS_DESPEDIDA:
+        if kw in t:
+            return kw
+    return None
+
+
+def detectar_redirect_email(texto):
+    """Retorna a frase de redirect pra email (str) ou None."""
+    if not texto:
+        return None
+    t = texto.lower()
+    for kw in PALAVRAS_REDIRECT_EMAIL:
+        if kw in t:
+            return kw
+    return None
+
+
+# Respostas padrão de encerramento — NÃO chamam Claude.
+RESPOSTA_ENCERRAMENTO = (
+    "Entendido! Se precisar de algo no futuro é só chamar. Até mais! 😊"
+)
+RESPOSTA_REDIRECT_EMAIL = (
+    "Entendido! Vou te mandar um email em breve. Até mais!"
+)
+RESPOSTA_LIMITE_MSGS = (
+    "Obrigado pela atenção! Se precisar de algo no futuro é só chamar. 😊"
+)
+
+# Limite duro: se o Leo já mandou N respostas sem o cliente acionar
+# lead_quente (que já causa silêncio), encerra educadamente pra não queimar
+# tokens nem o lead. Conta só assistant msgs que foram realmente enviadas
+# (LIVE), não dry_run.
+LIMITE_ASSISTANT_MSGS_SEM_INTERESSE = 5
+
+
 def marcar_rejeitado_pipeline(numero):
     """Marca status='Rejeitado' na linha do pipeline cujo contato bate com o número.
     Retorna nome do prospect (ou None se não estava na pipeline)."""
@@ -775,6 +859,34 @@ def marcar_rejeitado_pipeline(numero):
             if row["observacao"]:
                 row["observacao"] += " | "
             row["observacao"] += f"rejeitado em {datetime.now().isoformat(timespec='seconds')}"
+            nome_match = row.get("nome", "")
+            break
+    if nome_match:
+        write_csv(PIPELINE_CSV, pipeline, PIPELINE_FIELDS)
+    return nome_match
+
+
+def marcar_encerrado_pipeline(numero, motivo=None):
+    """Marca status='Encerrado' na linha do pipeline cujo contato bate.
+    Diferente de 'Rejeitado': não foi um NÃO do cliente, foi só fim de
+    conversa educado (despedida / redirect pra email / limite de msgs).
+    Retorna nome do prospect (ou None)."""
+    pipeline = read_csv(PIPELINE_CSV)
+    if not pipeline:
+        return None
+    digits = "".join(c for c in str(numero) if c.isdigit())
+    nome_match = None
+    for row in pipeline:
+        contato = "".join(c for c in (row.get("contato") or "") if c.isdigit())
+        if contato and (contato in digits or digits in contato):
+            row["status"] = "Encerrado"
+            row["observacao"] = (row.get("observacao") or "").strip()
+            if row["observacao"]:
+                row["observacao"] += " | "
+            tag = f"encerrado em {datetime.now().isoformat(timespec='seconds')}"
+            if motivo:
+                tag += f" ({motivo})"
+            row["observacao"] += tag
             nome_match = row.get("nome", "")
             break
     if nome_match:
@@ -924,6 +1036,16 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
         save_conversa(numero, conversa)
         return {"sent": False, "reason": "blacklisted", "lead_quente": False}
 
+    # 0b. ENCERRADA — conversa já finalizada (despedida formal, redirect pra
+    #     email, ou limite de msgs atingido). Silêncio total nas próximas msgs.
+    if conversa.get("encerrada"):
+        log(f"[{numero}] conversa encerrada — silenciando "
+            f"({conversa.get('encerrada_motivo', '?')})", "INFO")
+        _append_user_msg()
+        save_conversa(numero, conversa)
+        return {"sent": False, "reason": "encerrada_silencio",
+                "lead_quente": False}
+
     # 1. Se já marcado como lead quente, não responde mais — humano assume
     if conversa.get("lead_quente"):
         log(f"[{numero}] lead quente — silenciando", "INFO")
@@ -1018,6 +1140,44 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
                 "lead_quente": False,
                 "blacklisted": True,
                 "resposta": resposta_rej}
+
+    # 2.5. ENCERRAMENTO — despedida formal ou redirect pra email.
+    #      Responde UMA vez educadamente e marca conversa.encerrada=True.
+    #      Próximas mensagens caem no check 0b acima = silêncio total.
+    #      Sem chamar Claude — quebra o loop de "até mais" ↔ "até breve".
+    redirect_email_kw = detectar_redirect_email(texto_recebido)
+    despedida_kw = detectar_despedida(texto_recebido)
+    if redirect_email_kw or despedida_kw:
+        if redirect_email_kw:
+            resposta_enc = RESPOSTA_REDIRECT_EMAIL
+            motivo_curto = f"redirect_email:{redirect_email_kw[:30]}"
+        else:
+            resposta_enc = RESPOSTA_ENCERRAMENTO
+            motivo_curto = f"despedida:{despedida_kw[:30]}"
+
+        _append_user_msg()
+        send_resp = send_whatsapp_via_evolution(numero, resposta_enc)
+        if send_resp.get("ok"):
+            conversa["mensagens"].append({
+                "role": "assistant", "content": resposta_enc,
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "dry_run": send_resp.get("dry_run", False),
+            })
+        conversa["encerrada"] = True
+        conversa["encerrada_em"] = datetime.now().isoformat(timespec="seconds")
+        conversa["encerrada_motivo"] = motivo_curto
+        save_conversa(numero, conversa)
+        try:
+            nome_pipeline = marcar_encerrado_pipeline(numero, motivo_curto)
+        except Exception as e:
+            log(f"falhou marcar encerrado pipeline: {e}", "ERROR")
+            nome_pipeline = None
+        log(f"👋 [{numero}] ENCERRADO ({motivo_curto}) — "
+            f"prospect={nome_pipeline or '(novo)'}")
+        return {"sent": send_resp.get("ok", False),
+                "reason": f"encerrado_{motivo_curto}",
+                "lead_quente": False,
+                "resposta": resposta_enc}
 
     # 3. Anti-spam: SÓ bloqueia se a MESMA mensagem do user chegou 2x em <5s.
     #    Cliente engajado que responde rápido com conteúdo NOVO não é spam —
@@ -1118,6 +1278,39 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
     wait = random.randint(DELAY_MIN_SEG, DELAY_MAX_SEG)
     log(f"[{numero}] respondendo em {wait}s")
     time.sleep(wait)
+
+    # 7.5. LIMITE DE MSGS DO LEO — se já mandamos N respostas LIVE sem o
+    #      cliente acionar lead_quente (que daria silêncio automático), o lead
+    #      tá morno. Encerra educadamente — não vale gastar Claude pra
+    #      conversa que tá indo a lugar nenhum.
+    msgs_leo_live = sum(
+        1 for m in conversa.get("mensagens", [])
+        if m.get("role") == "assistant" and not m.get("dry_run")
+    )
+    if msgs_leo_live >= LIMITE_ASSISTANT_MSGS_SEM_INTERESSE:
+        send_resp = send_whatsapp_via_evolution(numero, RESPOSTA_LIMITE_MSGS)
+        if send_resp.get("ok"):
+            conversa["mensagens"].append({
+                "role": "assistant", "content": RESPOSTA_LIMITE_MSGS,
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "dry_run": send_resp.get("dry_run", False),
+            })
+        conversa["encerrada"] = True
+        conversa["encerrada_em"] = datetime.now().isoformat(timespec="seconds")
+        conversa["encerrada_motivo"] = (
+            f"limite_msgs_sem_interesse:{msgs_leo_live}"
+        )
+        save_conversa(numero, conversa)
+        try:
+            marcar_encerrado_pipeline(numero, "limite_msgs_sem_interesse")
+        except Exception as e:
+            log(f"falhou marcar encerrado pipeline (limite): {e}", "ERROR")
+        log(f"⏹ [{numero}] LIMITE atingido ({msgs_leo_live} msgs Leo "
+            f"sem lead_quente) — encerrando")
+        return {"sent": send_resp.get("ok", False),
+                "reason": "limite_msgs_encerrado",
+                "lead_quente": False,
+                "resposta": RESPOSTA_LIMITE_MSGS}
 
     # 8. Chama Claude
     historico_pra_claude = conversa.get("mensagens", [])[:-1]  # sem a msg que acabou de chegar
