@@ -194,6 +194,11 @@ BOT_URL_PATTERNS = [
     "ifood.com", "rappi.com", "uber.com", "ubereats.com",
     "aiqfome.com", "mykeeta.com", "keeta.com", "99food", "99app.com",
     "anota.ai", "goomer.app", "neemo.com.br", "delivery.much.com",
+    # menu digital / link menu (caso real 15/05 escapou aqui)
+    "livemenu.app", "livemenu.com", "linkmenu.com", "linkmenu.app",
+    "menudigital.com", "menu-digital", "cardapioweb", "cardapio-web",
+    "cardapionapalma", "menu.app", "menudino", "saipos.com",
+    "consumer.menu", "abrahao.com", "pedidoja.com",
 ]
 
 # Frases recorrentes de WhatsApp Business / atendimento automático
@@ -214,6 +219,17 @@ BOT_FRASES = [
     "aguarde a confirmação", "aguarde a confirmacao",
     "aguarde confirmação", "aguarde confirmacao",
     "aguarde nosso retorno", "aguarde retorno",
+    # Novos padrões 15/05 — restaurante mandou ficha automática
+    "segue algumas informações", "segue algumas informacoes",
+    "segue as informações", "segue as informacoes",
+    "segue informações", "segue informacoes",
+    "link para acessar nosso menu", "link para acessar o menu",
+    "link para o menu", "link do nosso menu", "link do menu",
+    "link para o cardápio", "link do cardápio",
+    "link para o cardapio", "link do cardapio",
+    "acesse nosso menu", "acesse nosso cardápio", "acesse nosso cardapio",
+    "ficou alguma dúvida", "ficou alguma duvida",
+    "gostaria de fazer uma reserva", "gostaria de fazer reserva",
 ]
 
 # Atendente virtual de WhatsApp Business — assinaturas inequívocas.
@@ -272,6 +288,21 @@ FIRST_TIME_SOFT_PREFIXES = (
 # mesmo com padrão de bot. Bots de WhatsApp Business respondem em segundos;
 # se demorou >5 min, provavelmente um humano leu e tá respondendo.
 DELAY_HUMANO_MIN_SEG = 300
+
+# Anti-repetição agressiva: 2+ msgs idênticas OU >=80% similares do mesmo
+# número em <5min = bot, ban imediato. Ignora mensagens curtas (<50 chars)
+# pra evitar banir humano impaciente que repete "oi" / "alô" sem resposta.
+ANTI_REPETICAO_JANELA_SEG = 300
+ANTI_REPETICAO_LIMIAR_SIMILAR = 0.80
+ANTI_REPETICAO_MIN_CHARS = 50
+
+# 2+ linhas no formato "Label: valor" sugere ficha automática (bot).
+# Pega o caso real do livemenu.app que escapou em 15/05:
+#   "Endereço: ...\nHorários: ...\nLink para o menu: https://..."
+FICHA_LABEL_LINHA_REGEX = re.compile(
+    r"^\s*([A-ZÀ-Üa-zà-ü][A-Za-zÀ-ÿ\s\-]{2,30})\s*:\s+\S",
+    re.MULTILINE,
+)
 
 
 def detectar_bot_whatsapp(texto, conversa=None):
@@ -338,6 +369,12 @@ def detectar_bot_whatsapp(texto, conversa=None):
     if ("cardápio" in t_lower or "cardapio" in t_lower) and \
             re.search(r"@[A-Za-z0-9_.]{3,}", t):
         return "bot_pattern:cardapio_instagram"
+
+    # 2+ linhas no formato "Label: valor" — ficha automática típica
+    # (Endereço:, Horários:, Link:, Telefone:, etc.)
+    linhas_label = len(FICHA_LABEL_LINHA_REGEX.findall(t))
+    if linhas_label >= 2:
+        return f"bot_pattern:ficha_{linhas_label}_labels"
 
     if len(PRICE_REGEX.findall(t)) >= 2:
         return "cardapio_precos"
@@ -423,6 +460,47 @@ def _detectar_loop(conversa, texto_recebido):
             if count >= LOOP_MENSAGENS_IDENTICAS:
                 return True
     return False
+
+
+def _detectar_repeticao_user(conversa, texto_recebido):
+    """Detector mais agressivo que _detectar_loop:
+    2+ msgs idênticas OU >=80% similares do mesmo user em <5min.
+
+    Pega bots que mudam só uma palavra ou pontuação entre tentativas.
+    Ignora mensagens curtas (<50 chars) pra não banir humano repetindo
+    'oi'/'alô' sem resposta.
+
+    Retorna motivo (str) se detectou, senão None.
+    """
+    if not texto_recebido:
+        return None
+    norm = texto_recebido.strip().lower()
+    if len(norm) < ANTI_REPETICAO_MIN_CHARS:
+        return None
+    cutoff = datetime.now() - timedelta(seconds=ANTI_REPETICAO_JANELA_SEG)
+    for m in conversa.get("mensagens", []):
+        if m.get("role") != "user":
+            continue
+        try:
+            ts = datetime.fromisoformat(m["ts"])
+        except Exception:
+            continue
+        if ts < cutoff:
+            continue
+        prev = (m.get("content") or "").strip().lower()
+        if not prev or len(prev) < ANTI_REPETICAO_MIN_CHARS:
+            continue
+        if prev == norm:
+            return "identica"
+        # comprimento similar evita falsos de SequenceMatcher entre msgs
+        # de tamanhos muito diferentes
+        if abs(len(prev) - len(norm)) > max(len(prev), len(norm)) * 0.4:
+            continue
+        from difflib import SequenceMatcher
+        ratio = SequenceMatcher(None, prev[:600], norm[:600]).ratio()
+        if ratio >= ANTI_REPETICAO_LIMIAR_SIMILAR:
+            return f"similar_{int(ratio * 100)}pct"
+    return None
 
 
 def _resposta_duplicada(conversa, resposta_proposta):
@@ -1098,6 +1176,22 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
         except Exception as e:
             log(f"falhou marcar bot na pipeline: {e}", "ERROR")
         return {"sent": False, "reason": f"bot:{bot_motivo}", "lead_quente": False}
+
+    # 1.55. ANTI-REPETIÇÃO agressiva — 2+ msgs idênticas OU >=80% similares
+    #       em <5min = bot. Pega bot que muda só pontuação entre retries.
+    #       Janela maior e threshold menor que _detectar_loop (1.6 abaixo).
+    repeticao = _detectar_repeticao_user(conversa, texto_recebido)
+    if repeticao:
+        motivo = f"repeticao_{repeticao}_<{ANTI_REPETICAO_JANELA_SEG}s"
+        log(f"[BOT] repetição detectada ({motivo}) — número={numero}", "INFO")
+        _registrar_bot(numero, motivo)
+        try:
+            _marcar_bot_pipeline(numero, motivo)
+        except Exception as e:
+            log(f"falhou marcar bot na pipeline (repeticao): {e}", "ERROR")
+        _append_user_msg()
+        save_conversa(numero, conversa)
+        return {"sent": False, "reason": motivo, "lead_quente": False}
 
     # 1.6. LOOP: 3+ mensagens idênticas em LOOP_JANELA_SEG → bot.
     if _detectar_loop(conversa, texto_recebido):
