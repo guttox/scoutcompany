@@ -206,9 +206,14 @@ BOT_FRASES = [
     "atendimento automático", "atendimento automatico",
     "somente via", "apenas via", "pedidos somente",
     "horário de funcionamento", "horario de funcionamento",
+    "horários de funcionamento", "horarios de funcionamento",
     "horário de atendimento", "horario de atendimento",
+    "horários de atendimento", "horarios de atendimento",
     "cardápio digital", "cardapio digital", "nosso cardápio", "nosso cardapio",
     "faça seu pedido", "faca seu pedido",
+    "aguarde a confirmação", "aguarde a confirmacao",
+    "aguarde confirmação", "aguarde confirmacao",
+    "aguarde nosso retorno", "aguarde retorno",
 ]
 
 # Atendente virtual de WhatsApp Business — assinaturas inequívocas.
@@ -304,6 +309,19 @@ def detectar_bot_whatsapp(texto, conversa=None):
         if frase in t_lower:
             return f"frase_auto:{frase[:40]}"
 
+    # === COMBOS estruturados (cardápio digital, ficha de reservas) ===
+    if "reservas" in t_lower and any(
+        kw in t_lower for kw in
+        ("horário", "horario", "funcionamento", "abertos", "fechados",
+         "segunda", "terça", "terca", "quarta", "quinta", "sexta", "sábado",
+         "sabado", "domingo")
+    ):
+        return "bot_pattern:reservas_horarios"
+
+    if ("cardápio" in t_lower or "cardapio" in t_lower) and \
+            re.search(r"@[A-Za-z0-9_.]{3,}", t):
+        return "bot_pattern:cardapio_instagram"
+
     if len(PRICE_REGEX.findall(t)) >= 2:
         return "cardapio_precos"
 
@@ -314,6 +332,19 @@ def detectar_bot_whatsapp(texto, conversa=None):
     sem_emoji = EMOJI_REGEX.sub("", t).strip()
     if not sem_emoji:
         return "so_emojis"
+
+    # === 3+ emojis DIFERENTES nos primeiros 80 chars + texto estruturado ===
+    emojis_inicio_distintos = set(EMOJI_REGEX.findall(t[:80]))
+    if len(emojis_inicio_distintos) >= 3 and len(t) > 30:
+        return f"bot_pattern:emojis_variados_{len(emojis_inicio_distintos)}"
+
+    # === 3+ linhas começando com emoji (tipo menu/cardápio multilinhas) ===
+    linhas_emoji_inicio = sum(
+        1 for l in t.splitlines()
+        if l.strip() and EMOJI_REGEX.match(l.strip()[:2])
+    )
+    if linhas_emoji_inicio >= 3:
+        return f"bot_pattern:multilinhas_emoji_{linhas_emoji_inicio}"
 
     inicio = t[:30]
     if sum(1 for e in BOT_EMOJIS_ESTRUTURADOS if e in inicio) >= 2:
@@ -895,12 +926,7 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
             save_conversa(numero, conversa)
             return {"sent": False, "reason": f"ignorado:{bot_motivo}",
                     "lead_quente": False}
-        if bot_motivo.startswith("atendente_virtual"):
-            log(f"[IGNORADO] atendente virtual detectado ({bot_motivo}) — "
-                f"número={numero}", "INFO")
-        else:
-            log(f"[IGNORADO] bot WhatsApp Business detectado: {bot_motivo} — "
-                f"número={numero}", "INFO")
+        log(f"[BOT] padrão detectado: {bot_motivo} — número={numero}", "INFO")
         _registrar_bot(numero, bot_motivo)
         try:
             _marcar_bot_pipeline(numero, bot_motivo)
