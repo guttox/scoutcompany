@@ -211,6 +211,28 @@ BOT_FRASES = [
     "faça seu pedido", "faca seu pedido",
 ]
 
+# Atendente virtual de WhatsApp Business — assinaturas inequívocas.
+# Match na PRIMEIRA mensagem já marca como bot permanentemente.
+BOT_FRASES_ATENDENTE_VIRTUAL = [
+    "atendente virtual",
+    "um atendente em breve",
+    "em breve falará com você", "em breve falara com voce",
+    "em breve estará com você", "em breve estara com voce",
+    "em breve entrará em contato", "em breve entrara em contato",
+    "em breve um atendente",
+]
+
+# Emojis de status que bots usam no início de respostas estruturadas
+# (disponível, ocupado, fora do ar, etc.)
+BOT_EMOJIS_STATUS_INICIO = ["🔴", "🟢", "🟡", "⚪", "⚫", "🟣", "🔵", "🟠", "🟤"]
+
+# Itálico de WhatsApp (_texto_). Bots costumam formatar bloco inteiro em itálico.
+ITALIC_MARKDOWN_REGEX = re.compile(r"(?:^|\s)_[^_\n]{2,80}_(?=\s|$|[,.!?:;])")
+
+# Agradecimentos curtos que, sozinhos após msg de bot anterior, indicam
+# segunda batida do mesmo bot (não de humano).
+OBRIGADO_TOKENS = {"obrigado", "obrigada", "obg", "vlw", "valeu", "ok", "ciente"}
+
 # Emojis estruturados típicos de menus/bots
 BOT_EMOJIS_ESTRUTURADOS = ["🛵", "✅", "📋", "📲", "🍔", "🍕", "📦",
                             "🛒", "🏪", "📞", "🕐", "🕒", "📍", "🔔"]
@@ -230,12 +252,46 @@ EMOJI_REGEX = re.compile(
 SOFT_BOT_MOTIVOS = {"muito_curta", "so_emojis", "so_link"}
 
 
-def detectar_bot_whatsapp(texto):
-    """Retorna motivo (str) se a mensagem parece bot/cardápio/auto, senão None."""
+def detectar_bot_whatsapp(texto, conversa=None):
+    """Retorna motivo (str) se a mensagem parece bot/cardápio/auto, senão None.
+
+    Se `conversa` for fornecida, ativa padrões dependentes de contexto
+    (ex.: 'Obrigado' isolado logo após uma mensagem do bot)."""
     if not texto:
         return None
     t = texto.strip()
     t_lower = t.lower()
+
+    if len(t) < 3:
+        # "Obrigado" isolado depois de msg de bot anterior conta como bot
+        # mesmo sendo curto (1 palavra). Avalia antes do guard de tamanho.
+        pass  # fallthrough — só short-circuita após tentar atendente virtual
+
+    # === ATENDENTE VIRTUAL (HARD — marca permanentemente já na 1ª mensagem) ===
+    for frase in BOT_FRASES_ATENDENTE_VIRTUAL:
+        if frase in t_lower:
+            return f"atendente_virtual:{frase[:40]}"
+
+    if t and t[0] in BOT_EMOJIS_STATUS_INICIO and len(t) > 4:
+        return f"atendente_virtual:emoji_status_{t[0]}"
+
+    italicos = ITALIC_MARKDOWN_REGEX.findall(t)
+    if len(italicos) >= 2:
+        return f"atendente_virtual:italicos_{len(italicos)}"
+
+    if conversa is not None:
+        norm_token = re.sub(r"[^a-zà-ÿ]", "", t_lower)
+        if norm_token in OBRIGADO_TOKENS:
+            for m in reversed(conversa.get("mensagens", [])):
+                if m.get("role") != "user":
+                    continue
+                prev = (m.get("content") or "").strip()
+                if not prev:
+                    break
+                prev_motivo = detectar_bot_whatsapp(prev)
+                if prev_motivo and prev_motivo not in SOFT_BOT_MOTIVOS:
+                    return "atendente_virtual:obrigado_pos_bot"
+                break
 
     if len(t) < 3:
         return "muito_curta"
@@ -829,7 +885,7 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
 
     # 1.5. BOT / cardápio digital / WhatsApp Business automático.
     #      Detectado por conteúdo da mensagem — ignora sem chamar Claude.
-    bot_motivo = detectar_bot_whatsapp(texto_recebido)
+    bot_motivo = detectar_bot_whatsapp(texto_recebido, conversa)
     if bot_motivo:
         if bot_motivo in SOFT_BOT_MOTIVOS:
             # Padrão fraco (msg curta, só link, só emojis) — pula resposta
@@ -839,8 +895,12 @@ def responder_mensagem(numero, texto_recebido, nome_pushname=None):
             save_conversa(numero, conversa)
             return {"sent": False, "reason": f"ignorado:{bot_motivo}",
                     "lead_quente": False}
-        log(f"[IGNORADO] bot WhatsApp Business detectado: {bot_motivo} — número={numero}",
-            "INFO")
+        if bot_motivo.startswith("atendente_virtual"):
+            log(f"[IGNORADO] atendente virtual detectado ({bot_motivo}) — "
+                f"número={numero}", "INFO")
+        else:
+            log(f"[IGNORADO] bot WhatsApp Business detectado: {bot_motivo} — "
+                f"número={numero}", "INFO")
         _registrar_bot(numero, bot_motivo)
         try:
             _marcar_bot_pipeline(numero, bot_motivo)
