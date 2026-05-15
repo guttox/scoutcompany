@@ -122,6 +122,26 @@ SITE_FRACO_HTML_MARKERS = (
 _HTML_CHECK_CACHE = {}
 
 
+def _telefone_eh_celular(tel):
+    """True se telefone BR é celular (1º dígito do número local = 9).
+    Aceita formatos '+55 11 91234-5678', '(11) 9 1234-5678', '11912345678', etc.
+    Heurística: pega só dígitos, remove DDI 55 se presente, depois DDD (2 dígitos),
+    e checa se o número local tem 9 dígitos começando com 9.
+    """
+    if not tel:
+        return False
+    digits = "".join(c for c in str(tel) if c.isdigit())
+    if not digits:
+        return False
+    if digits.startswith("55") and len(digits) >= 12:
+        digits = digits[2:]
+    # Agora deve ser DDD (2) + número local (8 fixo / 9 celular)
+    if len(digits) < 10:
+        return False
+    local = digits[2:]
+    return len(local) == 9 and local.startswith("9")
+
+
 def is_site_fraco(site):
     """Detecta site fraco via URL (rápido, sem HTTP)."""
     if not site:
@@ -208,14 +228,30 @@ def score_prospect(p, mock_data_lookup=None, ajustes_aprendizado=None):
             motivos.append("Site OK")
         # site decente — não pontua aqui
 
-    if rating >= 4.0:
+    # Rating: sweet spot 4.0-4.8 (bom mas não perfeito — perfeito tende a ser fake/poucos reviews)
+    if 4.0 <= rating <= 4.8:
         score += 2
+        motivos.append(f"Rating {rating:.1f} (sweet spot)")
+    elif rating >= 4.0:
+        score += 1
         motivos.append(f"Rating {rating:.1f}")
-    if n_reviews > 50:
+
+    # Volume de reviews: 50-500 = negócio ativo mas não grande demais (mais convertível)
+    if 50 <= n_reviews <= 500:
+        score += 2
+        motivos.append(f"{n_reviews} avaliações (sweet spot)")
+    elif n_reviews > 50:
         score += 1
         motivos.append(f"{n_reviews} avaliações")
+
+    # Telefone: celular > fixo (celular indica dono pequeno, fixo indica empresa maior/secretária)
     if tel:
-        score += 2
+        if _telefone_eh_celular(tel):
+            score += 2
+            motivos.append("Celular")
+        else:
+            score += 1
+            motivos.append("Telefone fixo")
 
     # Boosts baseados em aprendizado contínuo (ICP + segmentos campeões)
     if ajustes_aprendizado:

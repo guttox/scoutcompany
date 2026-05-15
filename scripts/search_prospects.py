@@ -21,17 +21,31 @@ from _common import (
 )
 
 DEFAULT_SEGMENTOS = [
-    "restaurante", "pizzaria", "padaria", "hamburgueria",
+    # Alimentação
+    "restaurante", "pizzaria", "padaria artesanal", "confeitaria artesanal",
+    "hamburgueria",
+    # Saúde
     "clinica odontologica", "clinica medica", "clinica estetica",
+    "clinica de beleza",
     "petshop", "veterinaria",
+    # Beleza
     "salao de beleza", "barbearia",
+    # Fitness
     "academia", "studio pilates",
+    # Varejo
     "loja de roupas", "otica",
-    "farmacia",
+    "farmacia independente",
+    # Serviços
     "imobiliaria",
     "contabilidade",
     "advocacia",
-    "auto mecanica",
+    "auto mecanica", "oficina mecanica",
+    # Educação
+    "escola de idiomas", "curso livre", "escola particular",
+    # Construção/imobiliário
+    "construtora pequena",
+    # Criativos
+    "fotografo profissional", "estudio de fotografia",
 ]
 
 

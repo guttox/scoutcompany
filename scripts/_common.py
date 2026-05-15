@@ -267,10 +267,15 @@ SEG_KEYWORDS_SITE = (
     "restaurante", "pizzaria", "padaria", "hamburger", "hamburgueria",
     "lanchonete", "doceria", "confeitaria", "buffet",
     "salao", "salão", "barbearia", "barber", "estetica", "estética",
+    "beleza",
     "petshop", "pet shop", "pet ",
     "loja", "boutique", "otica", "ótica",
     "farmacia", "farmácia",
     "academia",  # pequenas academias = site costuma resolver
+    # Criativos — portfólio + captação por site faz sentido
+    "fotografo", "fotógrafo", "fotografia", "estudio de fotografia",
+    # Construtoras pequenas — vitrine de obras + captação
+    "construtora",
 )
 SEG_KEYWORDS_SISTEMA = (
     "veterinaria", "veterinária",
@@ -729,12 +734,12 @@ def mensagem_ja_processada(message_id):
 # ═══════════════════════════════════════════════════════════
 # ESCALONAMENTO DE VOLUME (aquecimento do número)
 # ═══════════════════════════════════════════════════════════
-# Semana 1 (dias 1-7):   25/dia — aquecimento
-# Semana 2 (dias 8-14):  50/dia
-# Semana 3 (dias 15-21): 80/dia
-# Semana 4+ (dia 22+):   100/dia
+# Semana 1 (dias 1-7):   30/dia — aquecimento
+# Semana 2 (dias 8-14):  60/dia
+# Semana 3 (dias 15-21): 100/dia
+# Semana 4+ (dia 22+):   150/dia
 # Auto-throttle: se falha > 30% no dia ANTERIOR, reduz 20% no dia atual
-VOLUME_POR_SEMANA = {1: 25, 2: 50, 3: 80, 4: 100}
+VOLUME_POR_SEMANA = {1: 30, 2: 60, 3: 100, 4: 150}
 THROTTLE_FALHA_PCT = 30.0
 THROTTLE_REDUCAO = 0.20
 
@@ -811,22 +816,85 @@ def ddd_br_valido(ddd):
 
 
 # ═══════════════════════════════════════════════════════════
-# RODÍZIO DE CIDADES (busca em São Paulo expandido)
+# RODÍZIO DE CIDADES — expansão gradual em fases
 # ═══════════════════════════════════════════════════════════
+# Fase 1 (semana 1-2): só SP (~40 cidades)
+# Fase 2 (semana 3-4): SP + Sul
+# Fase 3 (mês 2+ / semana 5+): SP + Sul + MG + RJ
+# Override manual via env FASE_GEOGRAFICA=1|2|3
 CIDADES_RODIZIO_DEFAULT = [
+    # Região Metropolitana de SP
     "São Paulo", "Guarulhos", "Campinas", "Santo André",
-    "São Bernardo do Campo", "Osasco", "Sorocaba", "Ribeirão Preto",
+    "São Bernardo do Campo", "Osasco", "Sorocaba",
     "São José dos Campos", "Santos", "Mauá", "Mogi das Cruzes",
     "Diadema", "Carapicuíba", "Itaquaquecetuba",
+    "Suzano", "Taboão da Serra", "Barueri", "Cotia",
+    # Interior de SP
+    "Jundiaí", "Piracicaba", "Ribeirão Preto", "São José do Rio Preto",
+    "Bauru", "Presidente Prudente", "Marília", "Araçatuba",
+    "Araraquara", "São Carlos", "Franca", "Limeira",
+    "Taubaté", "Americana", "Botucatu", "Jacareí",
+    "Indaiatuba", "Hortolândia", "Sumaré", "Paulínia",
+    "Valinhos", "Vinhedo", "Itatiba",
 ]
+
+# Fase 2 — Sul (acrescentado a partir da semana 3)
+CIDADES_FASE2_SUL = [
+    "Curitiba, PR", "Florianópolis, SC", "Porto Alegre, RS",
+]
+
+# Fase 3 — MG + RJ (acrescentado a partir da semana 5 / mês 2)
+CIDADES_FASE3_BRASIL = [
+    "Belo Horizonte, MG", "Uberlândia, MG",
+    "Rio de Janeiro, RJ", "Niterói, RJ",
+]
+
+
+def calcular_fase_geografica():
+    """Retorna 1, 2 ou 3 baseado no número de dias desde primeiro_disparo.
+      Fase 1: dias 1-14   (semanas 1-2) → só SP
+      Fase 2: dias 15-28  (semanas 3-4) → SP + Sul
+      Fase 3: dia 29+     (mês 2+)      → SP + Sul + MG + RJ
+
+    Override via env FASE_GEOGRAFICA=1|2|3 (útil pra testar).
+    """
+    override = env("FASE_GEOGRAFICA", "")
+    if override and override.strip() in ("1", "2", "3"):
+        return int(override.strip())
+    cfg = read_config()
+    pd = cfg.get("primeiro_disparo")
+    if not pd:
+        return 1
+    try:
+        d0 = datetime.fromisoformat(pd).date()
+    except Exception:
+        try:
+            d0 = datetime.strptime(pd, "%Y-%m-%d").date()
+        except Exception:
+            return 1
+    delta_dias = (datetime.now().date() - d0).days
+    if delta_dias < 14:
+        return 1
+    if delta_dias < 28:
+        return 2
+    return 3
 
 
 def _ler_lista_cidades():
     raw = env("CIDADES_RODIZIO", "")
     if not raw:
-        return list(CIDADES_RODIZIO_DEFAULT)
-    cidades = [c.strip() for c in raw.split(",") if c.strip()]
-    return cidades or list(CIDADES_RODIZIO_DEFAULT)
+        cidades = list(CIDADES_RODIZIO_DEFAULT)
+    else:
+        cidades = [c.strip() for c in raw.split(",") if c.strip()]
+        if not cidades:
+            cidades = list(CIDADES_RODIZIO_DEFAULT)
+    # Acrescenta pools das fases ativas
+    fase = calcular_fase_geografica()
+    if fase >= 2:
+        cidades = cidades + list(CIDADES_FASE2_SUL)
+    if fase >= 3:
+        cidades = cidades + list(CIDADES_FASE3_BRASIL)
+    return cidades
 
 
 def proximas_cidades_rodizio(n=None):
