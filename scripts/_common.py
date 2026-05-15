@@ -614,6 +614,160 @@ def send_whatsapp_via_evolution(numero, texto, dry_run=None):
 
 
 # ═══════════════════════════════════════════════════════════
+# COTAS POR CATEGORIA — variedade forçada nos disparos diários
+# ═══════════════════════════════════════════════════════════
+# Antes: per-segment uniforme = Google Places retornava muito restaurante.
+# Agora: cotas fixas por CATEGORIA. Soma das cotas = 30 disparos/dia.
+# Cada categoria tem várias queries — o sistema rotaciona dentro da
+# categoria até atingir a cota dela.
+
+CATEGORIAS_COTAS_DEFAULT = [
+    {
+        "categoria": "restaurantes_delivery",
+        "cota": 6,
+        "queries": [
+            "restaurante", "pizzaria", "hamburgueria",
+            "lanchonete", "padaria", "doceria",
+        ],
+    },
+    {
+        "categoria": "saloes_barbearias",
+        "cota": 5,
+        "queries": [
+            "salao de beleza", "barbearia",
+            "estudio de estetica", "estudio de manicure",
+        ],
+    },
+    {
+        "categoria": "clinicas_dentistas",
+        "cota": 5,
+        "queries": [
+            "clinica odontologica", "clinica medica",
+            "clinica de dermatologia", "fisioterapia",
+        ],
+    },
+    {
+        "categoria": "petshops",
+        "cota": 4,
+        "queries": [
+            "petshop", "pet shop",
+            "veterinario", "banho e tosa",
+        ],
+    },
+    {
+        "categoria": "lojas_comercio",
+        "cota": 4,
+        "queries": [
+            "otica", "loja de roupas",
+            "papelaria", "loja de presentes", "loja de bijuteria",
+        ],
+    },
+    {
+        "categoria": "escritorios_b2b",
+        "cota": 3,
+        "queries": [
+            "escritorio de advocacia", "escritorio de contabilidade",
+            "imobiliaria", "consultoria empresarial",
+        ],
+    },
+    {
+        "categoria": "outros",
+        "cota": 3,
+        "queries": [
+            "academia", "studio pilates", "escola de idiomas",
+            "auto mecanica", "lavanderia",
+        ],
+    },
+]
+
+COTAS_OVERRIDE_PATH = DATA_DIR / "cotas_segmentos.json"
+COTAS_DIA_TMP_PATH = DATA_DIR / "cotas_dia.json"
+APRENDIZADOS_PATH_FOR_COTAS = DATA_DIR / "aprendizados.json"
+
+
+def _segmento_para_categoria(segmento):
+    """Mapeia o nome do segmento (query Google) pra categoria. Usado pra
+    contabilizar resultados e pro resumo final por categoria."""
+    if not segmento:
+        return None
+    s = segmento.lower()
+    for cat in CATEGORIAS_COTAS_DEFAULT:
+        for q in cat["queries"]:
+            if q in s or s in q:
+                return cat["categoria"]
+    return "outros"
+
+
+def montar_cotas_dia(aplicar_aprendizado=True):
+    """Retorna lista de categorias com cota ajustada pra hoje.
+
+    Ordem:
+      1. Override manual em data/cotas_segmentos.json (se existir)
+      2. CATEGORIAS_COTAS_DEFAULT
+      3. (Opcional) Boost +1/-1 conforme aprendizados.json — categorias
+         com melhor taxa de resposta ganham 1 unidade da pior.
+
+    Sempre retorna soma total = 30 (re-normaliza se aprendizado mexer).
+    """
+    if COTAS_OVERRIDE_PATH.exists():
+        try:
+            data = json.loads(COTAS_OVERRIDE_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, list) and data:
+                cotas = [dict(c) for c in data]
+            else:
+                cotas = [dict(c) for c in CATEGORIAS_COTAS_DEFAULT]
+        except Exception:
+            cotas = [dict(c) for c in CATEGORIAS_COTAS_DEFAULT]
+    else:
+        cotas = [dict(c) for c in CATEGORIAS_COTAS_DEFAULT]
+
+    if aplicar_aprendizado and APRENDIZADOS_PATH_FOR_COTAS.exists():
+        try:
+            apr = json.loads(APRENDIZADOS_PATH_FOR_COTAS.read_text(encoding="utf-8"))
+            ranking = apr.get("segmentos_ranking") or []
+            if ranking:
+                seg_to_cat = {}
+                for item in ranking:
+                    seg = (item.get("segmento") or "").lower()
+                    cat = _segmento_para_categoria(seg)
+                    if not cat:
+                        continue
+                    tx = float(item.get("taxa_resposta") or 0)
+                    seg_to_cat[cat] = max(seg_to_cat.get(cat, 0), tx)
+
+                if len(seg_to_cat) >= 2:
+                    ranked_cats = sorted(seg_to_cat.items(),
+                                         key=lambda x: x[1], reverse=True)
+                    melhor = ranked_cats[0][0]
+                    pior = ranked_cats[-1][0]
+                    if (ranked_cats[0][1] - ranked_cats[-1][1]) >= 0.05:
+                        for c in cotas:
+                            if c["categoria"] == melhor:
+                                c["cota"] = c.get("cota", 0) + 1
+                            elif c["categoria"] == pior and c.get("cota", 0) > 1:
+                                c["cota"] = c["cota"] - 1
+                        log(f"Cotas ajustadas por aprendizado: +1 em {melhor}, "
+                            f"-1 em {pior}")
+        except Exception as e:
+            log(f"Falha ao aplicar aprendizado nas cotas: {e}", "WARN")
+
+    return cotas
+
+
+def salvar_cotas_dia(cotas):
+    """Persiste as cotas do dia em data/cotas_dia.json — usado pra log e
+    pra debugging."""
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        COTAS_DIA_TMP_PATH.write_text(
+            json.dumps(cotas, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        log(f"Falha ao salvar cotas_dia.json: {e}", "WARN")
+
+
+# ═══════════════════════════════════════════════════════════
 # HISTÓRICO DE CONVERSAS (~/scout/conversas/[numero].json)
 # ═══════════════════════════════════════════════════════════
 def _conversa_path(numero):

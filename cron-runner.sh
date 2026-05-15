@@ -13,8 +13,8 @@ TS=$(date '+%Y-%m-%d %H:%M:%S')
 echo "" >> logs/cron.log
 echo "═══════ $TS — CRON RUN ═══════" >> logs/cron.log
 
-# Variedade: 5 segmentos × 4 cada = 20 prospects/dia
-/usr/bin/python3 -W ignore scripts/run_all.py \
-  --max 20 --per-segment 4 --top 15 \
-  --segmentos "barbearia,salao de beleza,petshop,clinica odontologica,advocacia,academia,contabilidade,otica,imobiliaria,studio pilates" \
-  >> logs/cron.log 2>&1
+# Variedade forçada por categoria — soma 30 disparos/dia, distribuídos:
+#   6 restaurantes/delivery · 5 salões/barbearias · 5 clínicas/dentistas
+#   4 petshops · 4 lojas/comércio · 3 escritórios/B2B · 3 outros
+# Sem flags = modo cotas (default). Cotas custom em data/cotas_segmentos.json.
+/usr/bin/python3 -W ignore scripts/run_all.py --top 15 >> logs/cron.log 2>&1

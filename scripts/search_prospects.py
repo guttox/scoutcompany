@@ -130,6 +130,111 @@ def fetch_real(segmentos, localizacao, raio_km, max_results, per_segment=None):
     return results
 
 
+def fetch_real_por_cotas(cotas, localizacao, raio_km):
+    """Busca via Google Places respeitando cotas por categoria.
+
+    cotas = [{"categoria": "...", "cota": N, "queries": [...]}, ...]
+
+    Itera categorias e dentro de cada uma rotaciona as queries até atingir
+    a cota daquela categoria (ou esgotar as queries). Retorna lista de
+    prospects, cada um marcado com o campo `categoria` herdado da bucket.
+    """
+    try:
+        import googlemaps  # type: ignore
+    except ImportError:
+        log("googlemaps não instalado. Rode: pip3 install googlemaps", "ERROR")
+        return []
+
+    key = env("GOOGLE_PLACES_KEY")
+    if not key:
+        log("GOOGLE_PLACES_KEY ausente — caindo para mock", "WARN")
+        return []
+
+    client = googlemaps.Client(key=key)
+    log(f"Buscando real POR COTAS: localizacao={localizacao}, raio={raio_km}km")
+
+    geocode = client.geocode(localizacao)
+    if not geocode:
+        log(f"Não consegui geocodificar '{localizacao}'", "ERROR")
+        return []
+    loc = geocode[0]["geometry"]["location"]
+    lat, lng = loc["lat"], loc["lng"]
+
+    seen = set()
+    results = []
+    contagem_por_categoria = {}
+
+    for bucket in cotas:
+        categoria = bucket["categoria"]
+        cota_alvo = int(bucket.get("cota", 0))
+        queries = bucket.get("queries") or []
+        cat_count = 0
+
+        for query in queries:
+            if cat_count >= cota_alvo:
+                break
+            try:
+                response = client.places(
+                    query=f"{query} {localizacao}",
+                    location=(lat, lng),
+                    radius=raio_km * 1000,
+                )
+            except Exception as e:
+                log(f"Falha em places('{query}'): {e}", "WARN")
+                continue
+
+            for place in response.get("results", []):
+                if cat_count >= cota_alvo:
+                    break
+                place_id = place.get("place_id")
+                if not place_id or place_id in seen:
+                    continue
+                seen.add(place_id)
+
+                try:
+                    details = client.place(
+                        place_id,
+                        fields=[
+                            "name", "formatted_address", "formatted_phone_number",
+                            "international_phone_number", "website", "rating",
+                            "user_ratings_total", "url",
+                        ],
+                    ).get("result", {})
+                except Exception as e:
+                    log(f"Falha em place_details('{place_id}'): {e}", "WARN")
+                    details = {}
+
+                phone = (details.get("international_phone_number")
+                         or details.get("formatted_phone_number") or "")
+                results.append({
+                    "nome": details.get("name") or place.get("name", ""),
+                    "segmento": query.title(),
+                    "categoria": categoria,
+                    "endereco": details.get("formatted_address")
+                                or place.get("formatted_address", ""),
+                    "cidade": _extract_cidade(
+                        details.get("formatted_address") or "", localizacao),
+                    "telefone": phone,
+                    "instagram": "",
+                    "site": details.get("website") or "",
+                    "rating": details.get("rating") or place.get("rating", 0),
+                    "user_ratings_total": (details.get("user_ratings_total")
+                                          or place.get("user_ratings_total", 0)),
+                    "place_id": place_id,
+                    "fonte": "google_places",
+                })
+                cat_count += 1
+
+        contagem_por_categoria[categoria] = cat_count
+        if cat_count < cota_alvo:
+            log(f"  ⚠ {categoria}: {cat_count}/{cota_alvo} (cota não preenchida "
+                f"em {localizacao})", "WARN")
+        else:
+            log(f"  ✓ {categoria}: {cat_count}/{cota_alvo}")
+
+    return results
+
+
 def _extract_cidade(endereco, fallback):
     """Extrai a cidade do endereço Google.
     Formato típico: 'Rua X, 123 - Bairro, Cidade - SP, CEP, Brazil'.
@@ -231,7 +336,23 @@ def main():
                         help="Lista de segmentos separados por vírgula")
     parser.add_argument("--per-segment", type=int, default=None,
                         help="Máximo de prospects por segmento (default: ilimitado)")
+    parser.add_argument("--cotas-json", default=None,
+                        help="Path pra JSON com cotas por categoria. Quando "
+                             "presente, ignora --segmentos/--per-segment e "
+                             "busca respeitando cotas. Formato: lista de "
+                             '{"categoria","cota","queries":[..]}.')
     args = parser.parse_args()
+
+    cotas_categorias = None
+    if args.cotas_json:
+        try:
+            with open(args.cotas_json, encoding="utf-8") as f:
+                cotas_categorias = json.load(f)
+            log(f"Modo COTAS-CATEGORIA: {len(cotas_categorias)} categorias, "
+                f"total cota = {sum(c.get('cota', 0) for c in cotas_categorias)}")
+        except Exception as e:
+            log(f"Falha ao ler --cotas-json={args.cotas_json}: {e}", "ERROR")
+            cotas_categorias = None
 
     segmentos = [s.strip() for s in args.segmentos.split(",") if s.strip()]
 
@@ -253,6 +374,16 @@ def main():
     if use_mock() or not env("GOOGLE_PLACES_KEY"):
         todos = fetch_mock(segmentos, args.max)
         log("Modo: MOCK (ignora rodízio)")
+    elif cotas_categorias:
+        log(f"Modo: REAL (Google Places) POR COTAS · raio={args.raio}km")
+        for cidade in cidades:
+            localizacao = cidade if "," in cidade else f"{cidade}, SP"
+            log(f"→ Buscando POR COTAS em {localizacao}")
+            res = fetch_real_por_cotas(cotas_categorias, localizacao, args.raio)
+            for p in res:
+                if not p.get("cidade"):
+                    p["cidade"] = cidade
+            todos.extend(res)
     else:
         log(f"Modo: REAL (Google Places) · raio={args.raio}km · quota/cidade={quota_cidade}")
         for cidade in cidades:

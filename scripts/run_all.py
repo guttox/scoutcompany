@@ -30,9 +30,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import (
-    PIPELINE_CSV, QUALIFICADOS_CSV,
+    PIPELINE_CSV, QUALIFICADOS_CSV, COTAS_DIA_TMP_PATH,
     calcular_max_disparos_hoje, env, is_truthy, load_env, log,
     read_config, read_csv, read_fila, write_config,
+    montar_cotas_dia, salvar_cotas_dia, _segmento_para_categoria,
 )
 
 import search_prospects
@@ -103,18 +104,21 @@ def _pegar_proximas_cidades(start_idx, n, pool):
     return out, idx
 
 
-def _rodada_busca(cidades_batch, args):
+def _rodada_busca(cidades_batch, args, cotas_json_path=None):
     """Executa search → qualify → enrich pra um batch de cidades. Idempotente
     sobre os CSVs (append + dedup)."""
     log(f"  → batch nas cidades: {cidades_batch}")
 
     sa = ["search_prospects.py", "--cidades", ",".join(cidades_batch)]
-    if args.max:
-        sa += ["--max", str(args.max)]
-    if args.per_segment:
-        sa += ["--per-segment", str(args.per_segment)]
-    if args.segmentos:
-        sa += ["--segmentos", args.segmentos]
+    if cotas_json_path:
+        sa += ["--cotas-json", str(cotas_json_path)]
+    else:
+        if args.max:
+            sa += ["--max", str(args.max)]
+        if args.per_segment:
+            sa += ["--per-segment", str(args.per_segment)]
+        if args.segmentos:
+            sa += ["--segmentos", args.segmentos]
     sys.argv = sa
     search_prospects.main()
 
@@ -153,9 +157,32 @@ def main():
         log(f"heartbeat falhou (não bloqueia pipeline): {e}", "WARN")
 
     # ────────────────────────────────────────────────────────
-    # Meta de WhatsApps válidos por dia (default = limite do escalonamento)
+    # Modo COTAS-CATEGORIA — variedade forçada por categoria.
+    # Default quando nenhuma flag legada (--per-segment/--segmentos) foi
+    # passada. Soma das cotas = ~30 prospects/dia distribuídos em buckets.
     # ────────────────────────────────────────────────────────
-    meta_wa = args.meta if args.meta else calcular_max_disparos_hoje()
+    usar_cotas = not (args.per_segment or args.segmentos)
+    cotas_path = None
+    cotas_hoje = None
+    if usar_cotas:
+        cotas_hoje = montar_cotas_dia(aplicar_aprendizado=True)
+        salvar_cotas_dia(cotas_hoje)
+        cotas_path = COTAS_DIA_TMP_PATH
+        resumo_cotas = ", ".join(f"{c['categoria']}={c['cota']}" for c in cotas_hoje)
+        meta_cotas = sum(int(c.get("cota", 0)) for c in cotas_hoje)
+        log(f"▶ Cotas por categoria (total={meta_cotas}): {resumo_cotas}")
+
+    # ────────────────────────────────────────────────────────
+    # Meta de WhatsApps válidos por dia (default = limite do escalonamento)
+    # Quando em modo cotas, usa o total das cotas (não o limite escalonado),
+    # garantindo que TODAS as categorias sejam preenchidas.
+    # ────────────────────────────────────────────────────────
+    if args.meta:
+        meta_wa = args.meta
+    elif cotas_hoje:
+        meta_wa = sum(int(c.get("cota", 0)) for c in cotas_hoje)
+    else:
+        meta_wa = calcular_max_disparos_hoje()
 
     # Lê config rodízio
     from _common import _ler_lista_cidades
@@ -192,7 +219,7 @@ def main():
 
         rodada += 1
         log(f">>> ETAPA 1 (rodada {rodada}) — search/qualify/enrich | meta {wa_atual}/{meta_wa}")
-        _rodada_busca(batch, args)
+        _rodada_busca(batch, args, cotas_json_path=cotas_path)
         cidades_usadas.extend(batch)
 
     wa_final = _whatsapps_disponiveis()
@@ -231,6 +258,40 @@ def main():
     log(">>> ETAPA 6 — enqueue_dispatch")
     sys.argv = ["enqueue_dispatch.py"]
     enqueue_dispatch.main()
+
+    # ────────────────────────────────────────────────────────
+    # RESUMO POR CATEGORIA — quantos qualificados (com WA) caíram em cada
+    # bucket vs cota. Acontece DEPOIS do enqueue pra refletir só o que vai
+    # de fato pra fila do dia.
+    # ────────────────────────────────────────────────────────
+    if cotas_hoje:
+        from collections import Counter
+        indisp = _numeros_indisponiveis()  # já tocados antes
+        # Conta qualificados RECENTES (não-tocados) por categoria
+        contagem = Counter()
+        for q in read_csv(QUALIFICADOS_CSV):
+            if (q.get("tem_whatsapp") or "").strip().lower() != "sim":
+                continue
+            wpp = q.get("whatsapp_link", "")
+            numero = ""
+            if "wa.me/" in wpp:
+                numero = wpp.split("wa.me/", 1)[1].split("?", 1)[0]
+            numero = _digits(numero)
+            if not numero:
+                continue
+            cat = _segmento_para_categoria(q.get("segmento", "")) or "outros"
+            contagem[cat] += 1
+
+        log("📊 Disparos hoje por categoria (real vs cota):")
+        partes = []
+        for bucket in cotas_hoje:
+            cat = bucket["categoria"]
+            cota = int(bucket.get("cota", 0))
+            real = contagem.get(cat, 0)
+            simbolo = "✓" if real >= cota else "⚠"
+            log(f"   {simbolo} {cat}: {real}/{cota}")
+            partes.append(f"{real} {cat.replace('_', '/')}")
+        log("Disparos hoje: " + " · ".join(partes))
 
     log("═══════════════════════════")
     log(f"SCOUT PIPELINE — COMPLETO · {wa_final}/{meta_wa} WhatsApps válidos")
